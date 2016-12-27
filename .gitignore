@@ -1,0 +1,9 @@
+# Build files
+/build
+
+# Qt Creator files
+/CMakeLists.txt.user*
+/hex.config
+/hex.files
+/hex.creator*
+/hex.includes
