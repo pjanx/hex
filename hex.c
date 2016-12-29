@@ -403,8 +403,6 @@ static void
 app_draw_footer (void)
 {
 	move (app_visible_items (), 0);
-	// TODO: write the footer
-	app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
 
 	// XXX: can we get rid of this and still make it look acceptable?
 	chtype a_normal = APP_ATTR (BAR);
@@ -413,12 +411,70 @@ app_draw_footer (void)
 	struct row_buffer buf;
 	row_buffer_init (&buf);
 
-	// TODO: print the filename here instead
 	row_buffer_append (&buf, APP_TITLE, a_normal);
-	row_buffer_append (&buf, " ", a_normal);
+	row_buffer_append (&buf, "  ", a_normal);
+	// TODO: transcode from locale encoding
+	row_buffer_append (&buf, g_ctx.filename, a_active);
 
-	// TODO: endian indication, position indication
+	struct str right;
+	str_init (&right);
+	str_append_printf (&right, "%08" PRIx64 "  ", g_ctx.view_cursor);
+	// TODO: endian switch
+	str_append (&right, "??  ");
+	// TODO: position indication
+	str_append (&right, "???");
+
+	row_buffer_align (&buf, COLS - right.len, a_normal);
+	row_buffer_append (&buf, right.str, a_normal);
 	app_flush_buffer (&buf, COLS, a_normal);
+
+	uint64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	if (g_ctx.view_cursor < g_ctx.data_offset
+	 || g_ctx.view_cursor >= end_addr)
+		return;
+
+	struct str x; str_init (&x);
+	struct str u; str_init (&u);
+	struct str s; str_init (&s);
+
+	int64_t len = end_addr - g_ctx.view_cursor;
+	uint8_t *cursor = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
+
+	// TODO: convert endianity, show full numbers
+	// TODO: make the headers bold
+	const char *coding = "??";
+	if (len >= 1)
+	{
+		str_append_printf (&x, "x8   %02x", cursor[0]);
+		str_append_printf (&u, "u8 %4u",    cursor[0]);
+		str_append_printf (&s, "s8 %4d",    cursor[0]);
+	}
+	if (len >= 2)
+	{
+		str_append_printf (&x, "  x16%s   %04x", coding, cursor[0]);
+		str_append_printf (&u, "  u16%s %6u",    coding, cursor[0]);
+		str_append_printf (&s, "  s16%s %6d",    coding, cursor[0]);
+	}
+	if (len >= 4)
+	{
+		str_append_printf (&x, "  x32%s    %08x", coding, cursor[0]);
+		str_append_printf (&u, "  u32%s %11u",    coding, cursor[0]);
+		str_append_printf (&s, "  s32%s %11d",    coding, cursor[0]);
+	}
+	if (len >= 8)
+	{
+		str_append_printf (&x, "  x64%s     %016x", coding, cursor[0]);
+		str_append_printf (&u, "  u64%s %20u",      coding, cursor[0]);
+		str_append_printf (&s, "  s64%s %20d",      coding, cursor[0]);
+	}
+
+	app_write_line (x.str, APP_ATTR (HEADER));
+	app_write_line (u.str, APP_ATTR (HEADER));
+	app_write_line (s.str, APP_ATTR (HEADER));
+
+	str_free (&x);
+	str_free (&u);
+	str_free (&s);
 }
 
 static void
@@ -431,7 +487,10 @@ app_on_refresh (void *user_data)
 	app_draw_view ();
 	app_draw_footer ();
 
-	// TODO: move the cursor where it belongs
+	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
+	int y = diff / ROW_SIZE;
+	int x = diff % ROW_SIZE;
+	move (y, x + 10 + x/8 + x/2);
 
 	refresh ();
 }
@@ -510,16 +569,22 @@ enum action
 	ACTION_NONE,
 	ACTION_QUIT,
 	ACTION_REDRAW,
+
 	ACTION_CHOOSE,
 	ACTION_DELETE,
+
 	ACTION_SCROLL_UP,
 	ACTION_SCROLL_DOWN,
 	ACTION_GOTO_TOP,
 	ACTION_GOTO_BOTTOM,
-	ACTION_GOTO_ITEM_PREVIOUS,
-	ACTION_GOTO_ITEM_NEXT,
 	ACTION_GOTO_PAGE_PREVIOUS,
 	ACTION_GOTO_PAGE_NEXT,
+
+	ACTION_UP,
+	ACTION_DOWN,
+	ACTION_LEFT,
+	ACTION_RIGHT,
+
 	ACTION_COUNT
 };
 
@@ -565,13 +630,6 @@ app_process_action (enum action action)
 		}
 		break;
 
-	case ACTION_GOTO_ITEM_PREVIOUS:
-		app_move_selection (-1);
-		break;
-	case ACTION_GOTO_ITEM_NEXT:
-		app_move_selection (1);
-		break;
-
 	case ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll (FOOTER_SIZE - LINES);
 		app_move_selection (FOOTER_SIZE - LINES);
@@ -579,6 +637,19 @@ app_process_action (enum action action)
 	case ACTION_GOTO_PAGE_NEXT:
 		app_scroll (LINES - FOOTER_SIZE);
 		app_move_selection (LINES - FOOTER_SIZE);
+		break;
+
+	case ACTION_UP:
+		app_move_selection (-1);
+		break;
+	case ACTION_DOWN:
+		app_move_selection (1);
+		break;
+	case ACTION_LEFT:
+		// TODO: decrement cursor, check bounds, invalidate
+		break;
+	case ACTION_RIGHT:
+		// TODO: increment cursor, check bounds, invalidate
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -647,14 +718,14 @@ g_default_bindings[] =
 	{ "End",        ACTION_GOTO_BOTTOM        },
 	{ "M-<",        ACTION_GOTO_TOP           },
 	{ "M->",        ACTION_GOTO_BOTTOM        },
-	{ "Up",         ACTION_GOTO_ITEM_PREVIOUS },
-	{ "Down",       ACTION_GOTO_ITEM_NEXT     },
-	{ "k",          ACTION_GOTO_ITEM_PREVIOUS },
-	{ "j",          ACTION_GOTO_ITEM_NEXT     },
+	{ "Up",         ACTION_UP },
+	{ "Down",       ACTION_DOWN     },
+	{ "k",          ACTION_UP },
+	{ "j",          ACTION_DOWN     },
 	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
 	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
-	{ "C-p",        ACTION_GOTO_ITEM_PREVIOUS },
-	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
+	{ "C-p",        ACTION_UP },
+	{ "C-n",        ACTION_DOWN     },
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
 	// TODO: C-e and C-y scroll up and down
