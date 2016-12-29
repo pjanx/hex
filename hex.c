@@ -44,10 +44,6 @@ enum
 	ATTRIBUTE_COUNT
 };
 
-// My battle-tested C framework acting as a GLib replacement.  Its one big
-// disadvantage is missing support for i18n but that can eventually be added
-// as an optional feature.  Localised applications look super awkward, though.
-
 // User data for logger functions to enable formatted logging
 #define print_fatal_data    ((void *) ATTRIBUTE_ERROR)
 #define print_error_data    ((void *) ATTRIBUTE_ERROR)
@@ -63,38 +59,9 @@ enum
 #ifndef TIOCGWINSZ
 #include <sys/ioctl.h>
 #endif  // ! TIOCGWINSZ
-#include <ncurses.h>
 
-// ncurses is notoriously retarded for input handling, we need something
-// different if only to receive mouse events reliably.
-
+#include "tui.c"
 #include "termo.h"
-
-// It is surprisingly hard to find a good library to handle Unicode shenanigans,
-// and there's enough of those for it to be impractical to reimplement them.
-//
-//                         GLib          ICU     libunistring    utf8proc
-// Decently sized            .            .            x            x
-// Grapheme breaks           .            x            .            x
-// Character width           x            .            x            x
-// Locale handling           .            .            x            .
-// Liberal license           .            x            .            x
-//
-// Also note that the ICU API is icky and uses UTF-16 for its primary encoding.
-//
-// Currently we're chugging along with libunistring but utf8proc seems viable.
-// Non-Unicode locales can mostly be handled with simple iconv like in sdtui.
-// Similarly grapheme breaks can be guessed at using character width (a basic
-// test here is Zalgo text).
-//
-// None of this is ever going to work too reliably anyway because terminals
-// and Unicode don't go awfully well together.  In particular, character cell
-// devices have some problems with double-wide characters.
-
-#include <unistr.h>
-#include <uniwidth.h>
-#include <uniconv.h>
-#include <unicase.h>
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
@@ -121,40 +88,13 @@ update_curses_terminal_size (void)
 #endif  // HAVE_RESIZETERM && TIOCGWINSZ
 }
 
-static char *
-latin1_to_utf8 (const char *latin1)
-{
-	struct str converted;
-	str_init (&converted);
-	while (*latin1)
-	{
-		uint8_t c = *latin1++;
-		if (c < 0x80)
-			str_append_c (&converted, c);
-		else
-		{
-			str_append_c (&converted, 0xC0 | (c >> 6));
-			str_append_c (&converted, 0x80 | (c & 0x3F));
-		}
-	}
-	return str_steal (&converted);
-}
-
 // --- Application -------------------------------------------------------------
 
-// Function names are prefixed mostly because of curses which clutters the
-// global namespace and makes it harder to distinguish what functions relate to.
-
-struct attrs
+enum
 {
-	short fg;                           ///< Foreground colour index
-	short bg;                           ///< Background colour index
-	chtype attrs;                       ///< Other attributes
+	ROW_SIZE = 16,                      ///< How many bytes on a row
+	FOOTER_SIZE = 4,                    ///< How many rows form the footer
 };
-
-// Basically a container for most of the globals; no big sense in handing
-// around a pointer to this, hence it is a simple global variable as well.
-// There is enough global state as it is.
 
 static struct app_context
 {
@@ -175,7 +115,9 @@ static struct app_context
 	uint8_t *data;                      ///< Target data
 	uint64_t data_len;                  ///< Length of the data
 	uint64_t data_offset;               ///< Offset of the data within the file
-	uint64_t data_cursor;               ///< Current position within the data
+
+	uint64_t view_top;                  ///< Offset of the top of the screen
+	uint64_t view_cursor;               ///< Offset of the cursor
 
 	// TODO: get rid of this as it can be computed from "data*"
 	size_t item_count;                  ///< Total item count
@@ -183,10 +125,6 @@ static struct app_context
 	int item_selected;                  ///< Index of the selected item
 
 	// Emulated widgets:
-
-	// TODO: make this the footer;
-	//   remove this, we know how high the footer is
-	int header_height;                  ///< Height of the header
 
 	struct poller_idle refresh_event;   ///< Refresh the screen
 
@@ -225,43 +163,6 @@ get_config_string (struct config_item *root, const char *key)
 	return item->value.string.str;
 }
 
-/// Load configuration for a color using a subset of git config colors
-static void
-app_load_color (struct config_item *subtree, const char *name, int id)
-{
-	const char *value = get_config_string (subtree, name);
-	if (!value)
-		return;
-
-	struct str_vector v;
-	str_vector_init (&v);
-	cstr_split (value, " ", true, &v);
-
-	int colors = 0;
-	struct attrs attrs = { -1, -1, 0 };
-	for (char **it = v.vector; *it; it++)
-	{
-		char *end = NULL;
-		long n = strtol (*it, &end, 10);
-		if (*it != end && !*end && n >= SHRT_MIN && n <= SHRT_MAX)
-		{
-			if (colors == 0) attrs.fg = n;
-			if (colors == 1) attrs.bg = n;
-			colors++;
-		}
-		else if (!strcmp (*it, "bold"))    attrs.attrs |= A_BOLD;
-		else if (!strcmp (*it, "dim"))     attrs.attrs |= A_DIM;
-		else if (!strcmp (*it, "ul"))      attrs.attrs |= A_UNDERLINE;
-		else if (!strcmp (*it, "blink"))   attrs.attrs |= A_BLINK;
-		else if (!strcmp (*it, "reverse")) attrs.attrs |= A_REVERSE;
-#ifdef A_ITALIC
-		else if (!strcmp (*it, "italic"))  attrs.attrs |= A_ITALIC;
-#endif  // A_ITALIC
-	}
-	str_vector_free (&v);
-	g_ctx.attrs[id] = attrs;
-}
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static void
@@ -272,8 +173,10 @@ load_config_colors (struct config_item *subtree, void *user_data)
 	// The attributes cannot be changed dynamically right now, so it doesn't
 	// make much sense to make use of "on_change" callbacks either.
 	// For simplicity, we should reload the entire table on each change anyway.
+	const char *value;
 #define XX(name, config, fg_, bg_, attrs_) \
-	app_load_color (subtree, config, ATTRIBUTE_ ## name);
+	if ((value = get_config_string (subtree, config))) \
+		g_ctx.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -342,11 +245,8 @@ app_init_terminal (void)
 	TERMO_CHECK_VERSION;
 	if (!(g_ctx.tk = termo_new (STDIN_FILENO, NULL, 0)))
 		abort ();
-	if (!initscr () || nonl () == ERR)
+	if (!initscr () || nonl () == ERR || curs_set (1) == ERR)
 		abort ();
-
-	// Disable cursor, we're not going to use it most of the time
-	curs_set (0);
 
 	// By default we don't use any colors so they're not required...
 	if (start_color () == ERR
@@ -407,179 +307,6 @@ app_is_character_in_locale (ucs4_t ch)
 	return true;
 }
 
-// --- Terminal output ---------------------------------------------------------
-
-// Necessary abstraction to simplify aligned, formatted character output
-
-struct row_char
-{
-	ucs4_t c;                           ///< Unicode codepoint
-	chtype attrs;                       ///< Special attributes
-	int width;                          ///< How many cells this takes
-};
-
-struct row_buffer
-{
-	struct row_char *chars;             ///< Characters
-	size_t chars_len;                   ///< Character count
-	size_t chars_alloc;                 ///< Characters allocated
-	int total_width;                    ///< Total width of all characters
-};
-
-static void
-row_buffer_init (struct row_buffer *self)
-{
-	memset (self, 0, sizeof *self);
-	self->chars = xcalloc (sizeof *self->chars, (self->chars_alloc = 256));
-}
-
-static void
-row_buffer_free (struct row_buffer *self)
-{
-	free (self->chars);
-}
-
-/// Replace invalid chars and push all codepoints to the array w/ attributes.
-static void
-row_buffer_append (struct row_buffer *self, const char *str, chtype attrs)
-{
-	// The encoding is only really used internally for some corner cases
-	const char *encoding = locale_charset ();
-
-	// Note that this function is a hotspot, try to keep it decently fast
-	struct row_char current = { .attrs = attrs };
-	struct row_char invalid = { .attrs = attrs, .c = '?', .width = 1 };
-	const uint8_t *next = (const uint8_t *) str;
-	while ((next = u8_next (&current.c, next)))
-	{
-		if (self->chars_len >= self->chars_alloc)
-			self->chars = xreallocarray (self->chars,
-				sizeof *self->chars, (self->chars_alloc <<= 1));
-
-		current.width = uc_width (current.c, encoding);
-		if (current.width < 0 || !app_is_character_in_locale (current.c))
-			current = invalid;
-
-		self->chars[self->chars_len++] = current;
-		self->total_width += current.width;
-	}
-}
-
-static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
-	ATTRIBUTE_SENTINEL;
-
-static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
-{
-	va_list ap;
-	va_start (ap, s);
-
-	while (s)
-	{
-		row_buffer_append (self, s, va_arg (ap, chtype));
-		s = va_arg (ap, const char *);
-	}
-	va_end (ap);
-}
-
-/// Pop as many codepoints as needed to free up "space" character cells.
-/// Given the suffix nature of combining marks, this should work pretty fine.
-static int
-row_buffer_pop_cells (struct row_buffer *self, int space)
-{
-	int made = 0;
-	while (self->chars_len && made < space)
-		made += self->chars[--self->chars_len].width;
-	self->total_width -= made;
-	return made;
-}
-
-static void
-row_buffer_space (struct row_buffer *self, int width, chtype attrs)
-{
-	if (width < 0)
-		return;
-
-	while (self->chars_len + width >= self->chars_alloc)
-		self->chars = xreallocarray (self->chars,
-			sizeof *self->chars, (self->chars_alloc <<= 1));
-
-	struct row_char space = { .attrs = attrs, .c = ' ', .width = 1 };
-	self->total_width += width;
-	while (width-- > 0)
-		self->chars[self->chars_len++] = space;
-}
-
-static void
-row_buffer_ellipsis (struct row_buffer *self, int target)
-{
-	if (self->total_width <= target
-	 || !row_buffer_pop_cells (self, self->total_width - target))
-		return;
-
-	// We use attributes from the last character we've removed,
-	// assuming that we don't shrink the array (and there's no real need)
-	ucs4_t ellipsis = L'…';
-	if (app_is_character_in_locale (ellipsis))
-	{
-		if (self->total_width >= target)
-			row_buffer_pop_cells (self, 1);
-		if (self->total_width + 1 <= target)
-			row_buffer_append (self, "…",   self->chars[self->chars_len].attrs);
-	}
-	else if (target >= 3)
-	{
-		if (self->total_width >= target)
-			row_buffer_pop_cells (self, 3);
-		if (self->total_width + 3 <= target)
-			row_buffer_append (self, "...", self->chars[self->chars_len].attrs);
-	}
-}
-
-static void
-row_buffer_align (struct row_buffer *self, int target, chtype attrs)
-{
-	row_buffer_ellipsis (self, target);
-	row_buffer_space (self, target - self->total_width, attrs);
-}
-
-static void
-row_buffer_print (uint32_t *ucs4, chtype attrs)
-{
-	// This assumes that we can reset the attribute set without consequences
-	char *str = u32_strconv_to_locale (ucs4);
-	if (str)
-	{
-		attrset (attrs);
-		addstr (str);
-		attrset (0);
-		free (str);
-	}
-}
-
-static void
-row_buffer_flush (struct row_buffer *self)
-{
-	if (!self->chars_len)
-		return;
-
-	// We only NUL-terminate the chunks because of the libunistring API
-	uint32_t chunk[self->chars_len + 1], *insertion_point = chunk;
-	for (size_t i = 0; i < self->chars_len; i++)
-	{
-		struct row_char *iter = self->chars + i;
-		if (i && iter[0].attrs != iter[-1].attrs)
-		{
-			row_buffer_print (chunk, iter[-1].attrs);
-			insertion_point = chunk;
-		}
-		*insertion_point++ = iter->c;
-		*insertion_point = 0;
-	}
-	row_buffer_print (chunk, self->chars[self->chars_len - 1].attrs);
-}
-
 // --- Rendering ---------------------------------------------------------------
 
 static void
@@ -609,39 +336,75 @@ app_write_line (const char *str, chtype attrs)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-static void
-app_flush_header (struct row_buffer *buf, chtype attrs)
+static int
+app_visible_items (void)
 {
-	move (g_ctx.header_height++, 0);
-	app_flush_buffer (buf, COLS, attrs);
+	return MAX (0, LINES - FOOTER_SIZE);
 }
 
 static void
-app_draw_status (void)
+app_draw_view (void)
 {
-	// XXX: can we get rid of this and still make it look acceptable?
-	chtype a_normal    = APP_ATTR (HEADER);
-	chtype a_highlight = APP_ATTR (HIGHLIGHT);
-
-	struct row_buffer buf;
-	row_buffer_init (&buf);
-	// ...
-	app_flush_header (&buf, a_normal);
-}
-
-static void
-app_draw_header (void)
-{
-	// TODO: call app_fix_view_range() if it changes from the previous value
-	g_ctx.header_height = 0;
-
-	if (true)
-		app_draw_status ();
-	else
+	uint64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	for (int y = 0; y < app_visible_items (); y++)
 	{
-		move (g_ctx.header_height++, 0);
-		app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
+		uint64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
+		if (row_addr > end_addr)
+			break;
+
+		int row_attrs = (row_addr / ROW_SIZE & 1)
+			? APP_ATTR (ODD) : APP_ATTR (EVEN);
+
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+
+		char *row_addr_str = xstrdup_printf ("%08" PRIX64, row_addr);
+		row_buffer_append (&buf, row_addr_str, row_attrs);
+		free (row_addr_str);
+
+		struct str ascii;
+		str_init (&ascii);
+		str_append (&ascii, "  ");
+
+		for (int x = 0; x < ROW_SIZE; x++)
+		{
+			if (x % 8 == 0) row_buffer_append (&buf, " ", row_attrs);
+			if (x % 2 == 0) row_buffer_append (&buf, " ", row_attrs);
+
+			uint64_t cell_addr = row_addr + x;
+			if (cell_addr < g_ctx.data_offset
+			 || cell_addr >= end_addr)
+			{
+				row_buffer_append (&buf, "  ", row_attrs);
+				str_append_c (&ascii, ' ');
+			}
+			else
+			{
+				uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
+				char *hex = xstrdup_printf ("%02x", cell);
+				row_buffer_append (&buf, hex, row_attrs);
+				free (hex);
+
+				if (cell >= 32 && cell < 127)
+					str_append_c (&ascii, cell);
+				else
+					str_append_c (&ascii, '.');
+			}
+		}
+		row_buffer_append (&buf, ascii.str, row_attrs);
+		str_free (&ascii);
+
+		move (y, 0);
+		app_flush_buffer (&buf, COLS, row_attrs);
 	}
+}
+
+static void
+app_draw_footer (void)
+{
+	move (app_visible_items (), 0);
+	// TODO: write the footer
+	app_write_line ("Connecting to MPD...", APP_ATTR (HEADER));
 
 	// XXX: can we get rid of this and still make it look acceptable?
 	chtype a_normal = APP_ATTR (BAR);
@@ -655,53 +418,7 @@ app_draw_header (void)
 	row_buffer_append (&buf, " ", a_normal);
 
 	// TODO: endian indication, position indication
-	app_flush_header (&buf, a_normal);
-}
-
-static int
-app_visible_items (void)
-{
-	// This may eventually include a header bar and/or a status bar
-	return MAX (0, LINES - g_ctx.header_height);
-}
-
-static void
-app_draw_view (void)
-{
-	move (g_ctx.header_height, 0);
-	clrtobot ();
-
-	int view_width = COLS;
-
-	int to_show = MIN (LINES - g_ctx.header_height,
-		(int) g_ctx.item_count - g_ctx.item_top);
-	for (int row = 0; row < to_show; row++)
-	{
-		int item_index = g_ctx.item_top + row;
-		int row_attrs = (item_index & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
-		if (item_index == g_ctx.item_selected)
-			row_attrs = APP_ATTR (SELECTION);
-
-		struct row_buffer buf;
-		row_buffer_init (&buf);
-		// TODO: draw the row using view_width
-
-		// Combine attributes used by the handler with the defaults.
-		// Avoiding attrset() because of row_buffer_flush().
-		for (size_t i = 0; i < buf.chars_len; i++)
-		{
-			chtype *attrs = &buf.chars[i].attrs;
-			if (item_index == g_ctx.item_selected)
-				*attrs = (*attrs & ~(A_COLOR | A_REVERSE)) | row_attrs;
-			else if ((*attrs & A_COLOR) && (row_attrs & A_COLOR))
-				*attrs |= (row_attrs & ~A_COLOR);
-			else
-				*attrs |=  row_attrs;
-		}
-
-		move (g_ctx.header_height + row, 0);
-		app_flush_buffer (&buf, view_width, row_attrs);
-	}
+	app_flush_buffer (&buf, COLS, a_normal);
 }
 
 static void
@@ -710,8 +427,11 @@ app_on_refresh (void *user_data)
 	(void) user_data;
 	poller_idle_reset (&g_ctx.refresh_event);
 
-	app_draw_header ();
+	erase ();
 	app_draw_view ();
+	app_draw_footer ();
+
+	// TODO: move the cursor where it belongs
 
 	refresh ();
 }
@@ -853,12 +573,12 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll ((int) g_ctx.header_height - LINES);
-		app_move_selection ((int) g_ctx.header_height - LINES);
+		app_scroll (FOOTER_SIZE - LINES);
+		app_move_selection (FOOTER_SIZE - LINES);
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
-		app_scroll (LINES - (int) g_ctx.header_height);
-		app_move_selection (LINES - (int) g_ctx.header_height);
+		app_scroll (LINES - FOOTER_SIZE);
+		app_move_selection (LINES - FOOTER_SIZE);
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -877,12 +597,13 @@ app_process_action (enum action action)
 static bool
 app_process_left_mouse_click (int line, int column)
 {
-	if (line == g_ctx.header_height - 1)
+	if (line == app_visible_items ())
 	{
+		// TODO: LE/BE switch, maybe something else
 	}
-	else
+	else if (line < app_visible_items ())
 	{
-		int row_index = line - g_ctx.header_height;
+		int row_index = line;
 		if (row_index < 0
 		 || row_index >= (int) g_ctx.item_count - g_ctx.item_top)
 			return false;
@@ -936,6 +657,7 @@ g_default_bindings[] =
 	{ "C-n",        ACTION_GOTO_ITEM_NEXT     },
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
+	// TODO: C-e and C-y scroll up and down
 
 	// Not sure how to set these up, they're pretty arbitrary so far
 	{ "Enter",      ACTION_CHOOSE             },
@@ -1271,6 +993,9 @@ main (int argc, char *argv[])
 	g_ctx.data = (uint8_t *) buf.str;
 	g_ctx.data_len = buf.len;
 
+	g_ctx.view_top = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
+	g_ctx.view_cursor = g_ctx.data_offset;
+
 	// We only need to convert to and from the terminal encoding
 	if (!setlocale (LC_CTYPE, ""))
 		print_warning ("failed to set the locale");
@@ -1280,6 +1005,7 @@ main (int argc, char *argv[])
 	app_init_terminal ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
+	app_invalidate ();
 
 	// Redirect all messages from liberty so that they don't disrupt display
 	g_log_message_real = app_log_handler;
