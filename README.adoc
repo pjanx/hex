@@ -1,12 +1,15 @@
 hex
 ===
 
-'hex' is yet another hex viewer.  As of now, there are no advantages to it.
+'hex' is yet another hex viewer.  Right now there are no advantages to it as it
+has almost no features at all at this stage.
+
+image::hex.png[align="center"]
 
 Plans
 -----
 In the future, it should be able to automatically interpret fields within files
-using a set of Lua scripts.
+using a set of Lua scripts, colorize them and show descriptions on the side.
 
 Packages
 --------
@@ -41,7 +44,8 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
 Note that for versions of CMake before 2.8.9, you need to prefix `cpack` with
 `fakeroot` or file ownership will end up wrong.
 
-Having the program installed, optionally create a configuration file and run it.
+Having the program installed, optionally create a configuration file and run it
+on a file of your choice.
 
 Configuration
 -------------
@@ -50,9 +54,9 @@ Create _~/.config/hex/hex.conf_ with contents like the following:
 ....
 colors = {
 	footer     = ""
-	highlight  = "bold"
+	footer_hl  = "bold"
 	bar        = "reverse"
-	bar_active = "ul"
+	bar_hl     = "reverse bold"
 	even       = ""
 	odd        = ""
 	selection  = "reverse"

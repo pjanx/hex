@@ -24,10 +24,10 @@
 // Avoiding colours in the defaults here in order to support dumb terminals.
 #define ATTRIBUTE_TABLE(XX)                                    \
 	XX( FOOTER,     "footer",     -1, -1, 0                  ) \
-	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD             ) \
+	XX( FOOTER_HL,  "footer_hl",  -1, -1, A_BOLD             ) \
 	/* Bar                                                  */ \
 	XX( BAR,        "bar",        -1, -1, A_REVERSE          ) \
-	XX( BAR_ACTIVE, "bar_active", -1, -1, A_REVERSE | A_BOLD ) \
+	XX( BAR_HL,     "bar_hl",     -1, -1, A_REVERSE | A_BOLD ) \
 	/* View                                                 */ \
 	XX( EVEN,       "even",       -1, -1, 0                  ) \
 	XX( ODD,        "odd",        -1, -1, 0                  ) \
@@ -440,7 +440,7 @@ app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
 		coding = "be";
 
 	char *key = xstrdup_printf ("%c%d%s", id, len * 8, coding);
-	row_buffer_append (b, key, APP_ATTR (HIGHLIGHT));
+	row_buffer_append (b, key, APP_ATTR (FOOTER_HL));
 	free (key);
 
 	struct str value;
@@ -462,7 +462,7 @@ app_draw_footer (void)
 
 	// XXX: can we get rid of this and still make it look acceptable?
 	chtype a_normal = APP_ATTR (BAR);
-	chtype a_active = APP_ATTR (BAR_ACTIVE);
+	chtype a_active = APP_ATTR (BAR_HL);
 
 	struct row_buffer buf;
 	row_buffer_init (&buf);
@@ -848,6 +848,8 @@ g_default_bindings[] =
 	{ "End",        ACTION_GOTO_BOTTOM,        {}},
 	{ "M-<",        ACTION_GOTO_TOP,           {}},
 	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
+	{ "g",          ACTION_GOTO_TOP,           {}},
+	{ "G",          ACTION_GOTO_BOTTOM,        {}},
 	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS, {}},
 	{ "PageDown",   ACTION_GOTO_PAGE_NEXT,     {}},
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS, {}},
