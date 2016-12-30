@@ -355,7 +355,7 @@ app_draw_view (void)
 	for (int y = 0; y < app_visible_items (); y++)
 	{
 		int64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
-		if (row_addr > end_addr)
+		if (row_addr >= end_addr)
 			break;
 
 		int row_attrs = (row_addr / ROW_SIZE & 1)
@@ -460,49 +460,55 @@ app_draw_footer (void)
 	struct str s; str_init (&s);
 
 	int64_t len = end_addr - g_ctx.view_cursor;
-	uint8_t *cursor = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
-
-	uint8_t copy[8] = {};
-	memcpy (copy, cursor, MIN (len, 8));
-
-	if (g_ctx.endianity == ENDIANITY_BE)
-		for (int i = 0; i < 4; i++)
-		{
-			uint8_t tmp = copy[7 - i];
-			copy[7 - i] = copy[i];
-			copy[i] = tmp;
-		}
+	uint8_t *p = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
 
 	// TODO: make the headers bold
 	const char *coding = g_ctx.endianity == ENDIANITY_LE ? "le" : "be";
+	uint64_t val;
 	if (len >= 1)
 	{
-		str_append_printf (&x, "x8   %02x", copy[0]);
-		str_append_printf (&u, "u8 %4u",    copy[0]);
-		str_append_printf (&s, "s8 %4d",    copy[0]);
+		str_append_printf (&x, "x8   %02x", (uint8_t) p[0]);
+		str_append_printf (&u, "u8 %4u", (uint8_t) p[0]);
+		str_append_printf (&s, "s8 %4d", (int8_t) p[0]);
 	}
 	if (len >= 2)
 	{
-		uint16_t val = copy[0] | copy[1] << 8;
-		str_append_printf (&x, "  x16%s   %04x", coding, val);
-		str_append_printf (&u, "  u16%s %6u",    coding, val);
-		str_append_printf (&s, "  s16%s %6d",    coding, val);
+		if (g_ctx.endianity == ENDIANITY_BE)
+			val = p[1] | p[0] << 8;
+		else
+			val = p[0] | p[1] << 8;
+
+		str_append_printf (&x, "  x16%s   %04x", coding, (uint16_t) val);
+		str_append_printf (&u, "  u16%s %6u", coding, (uint16_t) val);
+		str_append_printf (&s, "  s16%s %6d", coding, (int16_t) val);
 	}
 	if (len >= 4)
 	{
-		uint32_t val = copy[0] | copy[1] << 8 | copy[2] << 16 | copy[3] << 24;
-		str_append_printf (&x, "  x32%s    %08x", coding, val);
-		str_append_printf (&u, "  u32%s %11u",    coding, val);
-		str_append_printf (&s, "  s32%s %11d",    coding, val);
+		if (g_ctx.endianity == ENDIANITY_BE)
+			val = p[3] | p[2] << 8 | p[1] << 16 | p[0] << 24;
+		else
+			val = p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24;
+
+		str_append_printf (&x, "  x32%s    %08x", coding, (uint32_t) val);
+		str_append_printf (&u, "  u32%s %11u", coding, (uint32_t) val);
+		str_append_printf (&s, "  s32%s %11d", coding, (int32_t) val);
 	}
 	if (len >= 8)
 	{
-		uint64_t val = copy[0] | copy[1] << 8 | copy[2] << 16 | copy[3] << 24
-			| (uint64_t) copy[4] << 32 | (uint64_t) copy[5] << 40
-			| (uint64_t) copy[6] << 48 | (uint64_t) copy[7] << 56;
+		if (g_ctx.endianity == ENDIANITY_BE)
+			val = (uint64_t) p[7]       | (uint64_t) p[6] <<  8
+				| (uint64_t) p[5] << 16 | (uint64_t) p[4] << 24
+				| (uint64_t) p[3] << 32 | (uint64_t) p[2] << 40
+				| (uint64_t) p[1] << 48 | (uint64_t) p[0] << 56;
+		else
+			val = (uint64_t) p[0]       | (uint64_t) p[1] <<  8
+				| (uint64_t) p[2] << 16 | (uint64_t) p[3] << 24
+				| (uint64_t) p[4] << 32 | (uint64_t) p[5] << 40
+				| (uint64_t) p[6] << 48 | (uint64_t) p[7] << 56;
+
 		str_append_printf (&x, "  x64%s     %016" PRIx64, coding, val);
-		str_append_printf (&u, "  u64%s %20" PRIu64,      coding, val);
-		str_append_printf (&s, "  s64%s %20" PRId64,      coding, val);
+		str_append_printf (&u, "  u64%s %20" PRIu64, coding, val);
+		str_append_printf (&s, "  s64%s %20" PRId64, coding, (int64_t) val);
 	}
 
 	app_write_line (x.str, APP_ATTR (FOOTER));
@@ -546,8 +552,8 @@ app_fix_view_range (void)
 	}
 
 	// If the contents are at least as long as the screen, always fill it
-	int64_t max_view_top = (g_ctx.data_offset + g_ctx.data_len - 1)
-		/ ROW_SIZE * ROW_SIZE - app_visible_items () * ROW_SIZE;
+	int64_t max_view_top = ((g_ctx.data_offset + g_ctx.data_len - 1)
+		/ ROW_SIZE - app_visible_items () + 1) * ROW_SIZE;
 	// But don't let that suggest a negative offset
 	max_view_top = MAX (max_view_top, 0);
 
@@ -658,6 +664,7 @@ app_process_action (enum action action)
 
 	case ACTION_GOTO_TOP:
 		g_ctx.view_cursor = g_ctx.data_offset;
+		g_ctx.view_skip_nibble = false;
 		app_ensure_selection_visible ();
 		app_invalidate ();
 		break;
@@ -666,6 +673,7 @@ app_process_action (enum action action)
 			break;
 
 		g_ctx.view_cursor = g_ctx.data_offset + g_ctx.data_len - 1;
+		g_ctx.view_skip_nibble = false;
 		app_ensure_selection_visible ();
 		app_invalidate ();
 		break;
@@ -690,7 +698,9 @@ app_process_action (enum action action)
 			g_ctx.view_skip_nibble = false;
 		else
 		{
-			// TODO: check bounds
+			if (g_ctx.view_cursor <= g_ctx.data_offset)
+				return false;
+
 			g_ctx.view_skip_nibble = true;
 			g_ctx.view_cursor--;
 		}
@@ -702,7 +712,9 @@ app_process_action (enum action action)
 			g_ctx.view_skip_nibble = true;
 		else
 		{
-			// TODO: check bounds
+			if (g_ctx.view_cursor >= g_ctx.data_offset + g_ctx.data_len - 1)
+				return false;
+
 			g_ctx.view_skip_nibble = false;
 			g_ctx.view_cursor++;
 		}
@@ -740,13 +752,15 @@ app_process_left_mouse_click (int line, int column)
 			return false;
 
 		// TODO: convert and check "column"
-		int offset = 0;
 		if (column < 10 || column >= 50)
 			return false;
 
-		// TODO: check if the result is within bounds and return false if not
-		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset;
-		app_invalidate ();
+		int offset = column - 10;
+		offset -= offset/5 + offset/21;
+		g_ctx.view_skip_nibble = (offset & 1) == 1;
+
+		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset / 2;
+		return app_move_selection (0);
 	}
 	return true;
 }
