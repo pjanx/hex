@@ -1,5 +1,5 @@
 /*
- * hex -- a very simple hex viewer
+ * hex -- hex viewer
  *
  * Copyright (c) 2016, Přemysl Janouch <p.janouch@gmail.com>
  * All rights reserved.
@@ -22,19 +22,19 @@
 
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
-#define ATTRIBUTE_TABLE(XX)                             \
-	XX( HEADER,     "header",     -1, -1, 0           ) \
-	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD      ) \
-	/* Bar                                           */ \
-	XX( BAR,        "bar",        -1, -1, A_REVERSE   ) \
-	XX( BAR_ACTIVE, "bar_active", -1, -1, A_UNDERLINE ) \
-	/* Listview                                      */ \
-	XX( EVEN,       "even",       -1, -1, 0           ) \
-	XX( ODD,        "odd",        -1, -1, 0           ) \
-	XX( SELECTION,  "selection",  -1, -1, A_REVERSE   ) \
-	/* These are for debugging only                  */ \
-	XX( WARNING,    "warning",     3, -1, 0           ) \
-	XX( ERROR,      "error",       1, -1, 0           )
+#define ATTRIBUTE_TABLE(XX)                                    \
+	XX( FOOTER,     "footer",     -1, -1, 0                  ) \
+	XX( HIGHLIGHT,  "highlight",  -1, -1, A_BOLD             ) \
+	/* Bar                                                  */ \
+	XX( BAR,        "bar",        -1, -1, A_REVERSE          ) \
+	XX( BAR_ACTIVE, "bar_active", -1, -1, A_REVERSE | A_BOLD ) \
+	/* View                                                 */ \
+	XX( EVEN,       "even",       -1, -1, 0                  ) \
+	XX( ODD,        "odd",        -1, -1, 0                  ) \
+	XX( SELECTION,  "selection",  -1, -1, A_REVERSE          ) \
+	/* These are for debugging only                         */ \
+	XX( WARNING,    "warning",     3, -1, 0                  ) \
+	XX( ERROR,      "error",       1, -1, 0                  )
 
 enum
 {
@@ -96,6 +96,12 @@ enum
 	FOOTER_SIZE = 4,                    ///< How many rows form the footer
 };
 
+enum endianity
+{
+	ENDIANITY_LE,                       ///< Little endian
+	ENDIANITY_BE                        ///< Big endian
+};
+
 static struct app_context
 {
 	// Event loop:
@@ -113,16 +119,16 @@ static struct app_context
 	char *filename;                     ///< Target filename
 
 	uint8_t *data;                      ///< Target data
-	uint64_t data_len;                  ///< Length of the data
-	uint64_t data_offset;               ///< Offset of the data within the file
+	int64_t data_len;                   ///< Length of the data
+	int64_t data_offset;                ///< Offset of the data within the file
 
-	uint64_t view_top;                  ///< Offset of the top of the screen
-	uint64_t view_cursor;               ///< Offset of the cursor
+	// View:
 
-	// TODO: get rid of this as it can be computed from "data*"
-	size_t item_count;                  ///< Total item count
-	int item_top;                       ///< Index of the topmost item
-	int item_selected;                  ///< Index of the selected item
+	int64_t view_top;                   ///< Offset of the top of the screen
+	int64_t view_cursor;                ///< Offset of the cursor
+	bool view_skip_nibble;              ///< Half-byte offset
+
+	enum endianity endianity;           ///< Endianity
 
 	// Emulated widgets:
 
@@ -345,10 +351,10 @@ app_visible_items (void)
 static void
 app_draw_view (void)
 {
-	uint64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	for (int y = 0; y < app_visible_items (); y++)
 	{
-		uint64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
+		int64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
 		if (row_addr > end_addr)
 			break;
 
@@ -358,7 +364,7 @@ app_draw_view (void)
 		struct row_buffer buf;
 		row_buffer_init (&buf);
 
-		char *row_addr_str = xstrdup_printf ("%08" PRIX64, row_addr);
+		char *row_addr_str = xstrdup_printf ("%08" PRIx64, row_addr);
 		row_buffer_append (&buf, row_addr_str, row_attrs);
 		free (row_addr_str);
 
@@ -371,7 +377,7 @@ app_draw_view (void)
 			if (x % 8 == 0) row_buffer_append (&buf, " ", row_attrs);
 			if (x % 2 == 0) row_buffer_append (&buf, " ", row_attrs);
 
-			uint64_t cell_addr = row_addr + x;
+			int64_t cell_addr = row_addr + x;
 			if (cell_addr < g_ctx.data_offset
 			 || cell_addr >= end_addr)
 			{
@@ -412,23 +418,39 @@ app_draw_footer (void)
 	row_buffer_init (&buf);
 
 	row_buffer_append (&buf, APP_TITLE, a_normal);
-	row_buffer_append (&buf, "  ", a_normal);
-	// TODO: transcode from locale encoding
-	row_buffer_append (&buf, g_ctx.filename, a_active);
+
+	if (g_ctx.filename)
+	{
+		row_buffer_append (&buf, "  ", a_normal);
+		char *filename = (char *) u8_strconv_from_locale (g_ctx.filename);
+		row_buffer_append (&buf, filename, a_active);
+		free (filename);
+	}
 
 	struct str right;
 	str_init (&right);
 	str_append_printf (&right, "%08" PRIx64 "  ", g_ctx.view_cursor);
-	// TODO: endian switch
-	str_append (&right, "??  ");
-	// TODO: position indication
-	str_append (&right, "???");
+	str_append_printf (&right,
+		"%s  ", g_ctx.endianity == ENDIANITY_LE ? "LE" : "BE");
+
+	int64_t top = g_ctx.view_top;
+	int64_t bot = g_ctx.view_top + app_visible_items () * ROW_SIZE;
+	if (top <= g_ctx.data_offset
+	 && bot > g_ctx.data_offset + g_ctx.data_len)
+		str_append (&right, "All");
+	else if (top <= g_ctx.data_offset)
+		str_append (&right, "Top");
+	else if (bot > g_ctx.data_offset + g_ctx.data_len)
+		str_append (&right, "Bot");
+	else
+		// TODO: position indication in percents
+		str_append (&right, "??%");
 
 	row_buffer_align (&buf, COLS - right.len, a_normal);
 	row_buffer_append (&buf, right.str, a_normal);
 	app_flush_buffer (&buf, COLS, a_normal);
 
-	uint64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	if (g_ctx.view_cursor < g_ctx.data_offset
 	 || g_ctx.view_cursor >= end_addr)
 		return;
@@ -440,37 +462,52 @@ app_draw_footer (void)
 	int64_t len = end_addr - g_ctx.view_cursor;
 	uint8_t *cursor = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
 
-	// TODO: convert endianity, show full numbers
+	uint8_t copy[8] = {};
+	memcpy (copy, cursor, MIN (len, 8));
+
+	if (g_ctx.endianity == ENDIANITY_BE)
+		for (int i = 0; i < 4; i++)
+		{
+			uint8_t tmp = copy[7 - i];
+			copy[7 - i] = copy[i];
+			copy[i] = tmp;
+		}
+
 	// TODO: make the headers bold
-	const char *coding = "??";
+	const char *coding = g_ctx.endianity == ENDIANITY_LE ? "le" : "be";
 	if (len >= 1)
 	{
-		str_append_printf (&x, "x8   %02x", cursor[0]);
-		str_append_printf (&u, "u8 %4u",    cursor[0]);
-		str_append_printf (&s, "s8 %4d",    cursor[0]);
+		str_append_printf (&x, "x8   %02x", copy[0]);
+		str_append_printf (&u, "u8 %4u",    copy[0]);
+		str_append_printf (&s, "s8 %4d",    copy[0]);
 	}
 	if (len >= 2)
 	{
-		str_append_printf (&x, "  x16%s   %04x", coding, cursor[0]);
-		str_append_printf (&u, "  u16%s %6u",    coding, cursor[0]);
-		str_append_printf (&s, "  s16%s %6d",    coding, cursor[0]);
+		uint16_t val = copy[0] | copy[1] << 8;
+		str_append_printf (&x, "  x16%s   %04x", coding, val);
+		str_append_printf (&u, "  u16%s %6u",    coding, val);
+		str_append_printf (&s, "  s16%s %6d",    coding, val);
 	}
 	if (len >= 4)
 	{
-		str_append_printf (&x, "  x32%s    %08x", coding, cursor[0]);
-		str_append_printf (&u, "  u32%s %11u",    coding, cursor[0]);
-		str_append_printf (&s, "  s32%s %11d",    coding, cursor[0]);
+		uint32_t val = copy[0] | copy[1] << 8 | copy[2] << 16 | copy[3] << 24;
+		str_append_printf (&x, "  x32%s    %08x", coding, val);
+		str_append_printf (&u, "  u32%s %11u",    coding, val);
+		str_append_printf (&s, "  s32%s %11d",    coding, val);
 	}
 	if (len >= 8)
 	{
-		str_append_printf (&x, "  x64%s     %016x", coding, cursor[0]);
-		str_append_printf (&u, "  u64%s %20u",      coding, cursor[0]);
-		str_append_printf (&s, "  s64%s %20d",      coding, cursor[0]);
+		uint64_t val = copy[0] | copy[1] << 8 | copy[2] << 16 | copy[3] << 24
+			| (uint64_t) copy[4] << 32 | (uint64_t) copy[5] << 40
+			| (uint64_t) copy[6] << 48 | (uint64_t) copy[7] << 56;
+		str_append_printf (&x, "  x64%s     %016" PRIx64, coding, val);
+		str_append_printf (&u, "  u64%s %20" PRIu64,      coding, val);
+		str_append_printf (&s, "  s64%s %20" PRId64,      coding, val);
 	}
 
-	app_write_line (x.str, APP_ATTR (HEADER));
-	app_write_line (u.str, APP_ATTR (HEADER));
-	app_write_line (s.str, APP_ATTR (HEADER));
+	app_write_line (x.str, APP_ATTR (FOOTER));
+	app_write_line (u.str, APP_ATTR (FOOTER));
+	app_write_line (s.str, APP_ATTR (FOOTER));
 
 	str_free (&x);
 	str_free (&u);
@@ -490,7 +527,7 @@ app_on_refresh (void *user_data)
 	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
 	int y = diff / ROW_SIZE;
 	int x = diff % ROW_SIZE;
-	move (y, x + 10 + x/8 + x/2);
+	move (y, 10 + x*2 + g_ctx.view_skip_nibble + x/8 + x/2);
 
 	refresh ();
 }
@@ -501,21 +538,22 @@ app_on_refresh (void *user_data)
 static bool
 app_fix_view_range (void)
 {
-	if (g_ctx.item_top < 0)
+	if (g_ctx.view_top < g_ctx.data_offset / ROW_SIZE * ROW_SIZE)
 	{
-		g_ctx.item_top = 0;
+		g_ctx.view_top = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
 		app_invalidate ();
 		return false;
 	}
 
 	// If the contents are at least as long as the screen, always fill it
-	int max_item_top = (int) g_ctx.item_count - app_visible_items ();
+	int64_t max_view_top = (g_ctx.data_offset + g_ctx.data_len - 1)
+		/ ROW_SIZE * ROW_SIZE - app_visible_items () * ROW_SIZE;
 	// But don't let that suggest a negative offset
-	max_item_top = MAX (max_item_top, 0);
+	max_view_top = MAX (max_view_top, 0);
 
-	if (g_ctx.item_top > max_item_top)
+	if (g_ctx.view_top > max_view_top)
 	{
-		g_ctx.item_top = max_item_top;
+		g_ctx.view_top = max_view_top;
 		app_invalidate ();
 		return false;
 	}
@@ -526,7 +564,7 @@ app_fix_view_range (void)
 static bool
 app_scroll (int n)
 {
-	g_ctx.item_top += n;
+	g_ctx.view_top += n * ROW_SIZE;
 	app_invalidate ();
 	return app_fix_view_range ();
 }
@@ -534,15 +572,12 @@ app_scroll (int n)
 static void
 app_ensure_selection_visible (void)
 {
-	if (g_ctx.item_selected < 0)
-		return;
-
-	int too_high = g_ctx.item_top - g_ctx.item_selected;
+	int too_high = g_ctx.view_top / ROW_SIZE - g_ctx.view_cursor / ROW_SIZE;
 	if (too_high > 0)
 		app_scroll (-too_high);
 
-	int too_low = g_ctx.item_selected
-		- (g_ctx.item_top + app_visible_items () - 1);
+	int too_low = g_ctx.view_cursor / ROW_SIZE
+		- (g_ctx.view_top / ROW_SIZE + app_visible_items () - 1);
 	if (too_low > 0)
 		app_scroll (too_low);
 }
@@ -550,12 +585,13 @@ app_ensure_selection_visible (void)
 static bool
 app_move_selection (int diff)
 {
-	int fixed = g_ctx.item_selected += diff;
-	fixed = MAX (fixed, 0);
-	fixed = MIN (fixed, (int) g_ctx.item_count - 1);
+	// TODO: disallow partial up/down movement
+	int64_t fixed = g_ctx.view_cursor += diff * ROW_SIZE;
+	fixed = MAX (fixed, g_ctx.data_offset);
+	fixed = MIN (fixed, g_ctx.data_offset + g_ctx.data_len - 1);
 
-	bool result = g_ctx.item_selected != fixed;
-	g_ctx.item_selected = fixed;
+	bool result = g_ctx.view_cursor != fixed;
+	g_ctx.view_cursor = fixed;
 	app_invalidate ();
 
 	app_ensure_selection_visible ();
@@ -570,8 +606,7 @@ enum action
 	ACTION_QUIT,
 	ACTION_REDRAW,
 
-	ACTION_CHOOSE,
-	ACTION_DELETE,
+	ACTION_TOGGLE_ENDIANITY,
 
 	ACTION_SCROLL_UP,
 	ACTION_SCROLL_DOWN,
@@ -605,29 +640,34 @@ app_process_action (enum action action)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+	case ACTION_TOGGLE_ENDIANITY:
+		g_ctx.endianity = (g_ctx.endianity == ENDIANITY_LE)
+			? ENDIANITY_BE : ENDIANITY_LE;
+		app_invalidate ();
+		break;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 		// XXX: these should rather be parametrized
 	case ACTION_SCROLL_UP:
-		app_scroll (-3);
+		app_scroll (-1);
 		break;
 	case ACTION_SCROLL_DOWN:
-		app_scroll (3);
+		app_scroll (1);
 		break;
 
 	case ACTION_GOTO_TOP:
-		if (g_ctx.item_count)
-		{
-			g_ctx.item_selected = 0;
-			app_ensure_selection_visible ();
-			app_invalidate ();
-		}
+		g_ctx.view_cursor = g_ctx.data_offset;
+		app_ensure_selection_visible ();
+		app_invalidate ();
 		break;
 	case ACTION_GOTO_BOTTOM:
-		if (g_ctx.item_count)
-		{
-			g_ctx.item_selected = (int) g_ctx.item_count - 1;
-			app_ensure_selection_visible ();
-			app_invalidate ();
-		}
+		if (!g_ctx.data_len)
+			break;
+
+		g_ctx.view_cursor = g_ctx.data_offset + g_ctx.data_len - 1;
+		app_ensure_selection_visible ();
+		app_invalidate ();
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
@@ -646,10 +686,28 @@ app_process_action (enum action action)
 		app_move_selection (1);
 		break;
 	case ACTION_LEFT:
-		// TODO: decrement cursor, check bounds, invalidate
+		if (g_ctx.view_skip_nibble)
+			g_ctx.view_skip_nibble = false;
+		else
+		{
+			// TODO: check bounds
+			g_ctx.view_skip_nibble = true;
+			g_ctx.view_cursor--;
+		}
+		app_ensure_selection_visible ();
+		app_invalidate ();
 		break;
 	case ACTION_RIGHT:
-		// TODO: increment cursor, check bounds, invalidate
+		if (!g_ctx.view_skip_nibble)
+			g_ctx.view_skip_nibble = true;
+		else
+		{
+			// TODO: check bounds
+			g_ctx.view_skip_nibble = false;
+			g_ctx.view_cursor++;
+		}
+		app_ensure_selection_visible ();
+		app_invalidate ();
 		break;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -670,16 +728,24 @@ app_process_left_mouse_click (int line, int column)
 {
 	if (line == app_visible_items ())
 	{
-		// TODO: LE/BE switch, maybe something else
+		if (column <  COLS - 7
+		 || column >= COLS - 5)
+			return false;
+
+		// TODO: LE/BE switch
 	}
 	else if (line < app_visible_items ())
 	{
-		int row_index = line;
-		if (row_index < 0
-		 || row_index >= (int) g_ctx.item_count - g_ctx.item_top)
+		if (line < 0)
 			return false;
 
-		g_ctx.item_selected = row_index + g_ctx.item_top;
+		// TODO: convert and check "column"
+		int offset = 0;
+		if (column < 10 || column >= 50)
+			return false;
+
+		// TODO: check if the result is within bounds and return false if not
+		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset;
 		app_invalidate ();
 	}
 	return true;
@@ -712,27 +778,30 @@ g_default_bindings[] =
 	{ "Escape",     ACTION_QUIT               },
 	{ "q",          ACTION_QUIT               },
 	{ "C-l",        ACTION_REDRAW             },
-	// TODO: Tab switches endianity
+	{ "Tab",        ACTION_TOGGLE_ENDIANITY   },
 
 	{ "Home",       ACTION_GOTO_TOP           },
 	{ "End",        ACTION_GOTO_BOTTOM        },
 	{ "M-<",        ACTION_GOTO_TOP           },
 	{ "M->",        ACTION_GOTO_BOTTOM        },
-	{ "Up",         ACTION_UP },
-	{ "Down",       ACTION_DOWN     },
-	{ "k",          ACTION_UP },
-	{ "j",          ACTION_DOWN     },
 	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
 	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
-	{ "C-p",        ACTION_UP },
-	{ "C-n",        ACTION_DOWN     },
 	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
 	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
-	// TODO: C-e and C-y scroll up and down
 
-	// Not sure how to set these up, they're pretty arbitrary so far
-	{ "Enter",      ACTION_CHOOSE             },
-	{ "Delete",     ACTION_DELETE             },
+	{ "Up",         ACTION_UP                 },
+	{ "Down",       ACTION_DOWN               },
+	{ "Left",       ACTION_LEFT               },
+	{ "Right",      ACTION_RIGHT              },
+	{ "k",          ACTION_UP                 },
+	{ "j",          ACTION_DOWN               },
+	{ "h",          ACTION_LEFT               },
+	{ "l",          ACTION_RIGHT              },
+	{ "C-p",        ACTION_UP                 },
+	{ "C-n",        ACTION_DOWN               },
+
+	{ "C-y",        ACTION_SCROLL_UP          },
+	{ "C-e",        ACTION_SCROLL_DOWN        },
 };
 
 static bool
@@ -935,15 +1004,15 @@ app_init_poller_events (void)
 /// Decode size arguments according to similar rules to those that dd(1) uses;
 /// we support octal and hexadecimal numbers but they clash with suffixes
 static bool
-decode_size (const char *s, uint64_t *out)
+decode_size (const char *s, int64_t *out)
 {
 	char *end;
 	errno = 0;
-	uint64_t n = strtoul (s, &end, 0);
-	if (errno != 0 || end == s)
+	int64_t n = strtol (s, &end, 0);
+	if (errno != 0 || end == s || n < 0)
 		return false;
 
-	uint64_t f = 1;
+	int64_t f = 1;
 	switch (*end)
 	{
 	case 'c': f = 1 <<  0;                               end++;   break;
@@ -954,7 +1023,7 @@ decode_size (const char *s, uint64_t *out)
 	case 'M': f = 1 << 20; if (*++end == 'B') { f = 1e6; end++; } break;
 	case 'G': f = 1 << 30; if (*++end == 'B') { f = 1e9; end++; } break;
 	}
-	if (*end || n > UINT64_MAX / f)
+	if (*end || n > INT64_MAX / f)
 		return false;
 
 	*out = n * f;
@@ -977,7 +1046,7 @@ main (int argc, char *argv[])
 
 	struct opt_handler oh;
 	opt_handler_init (&oh, argc, argv, opts, "[FILE]", "Hex viewer.");
-	uint64_t size_limit = 1 << 30;
+	int64_t size_limit = 1 << 30;
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)
@@ -1049,7 +1118,7 @@ main (int argc, char *argv[])
 	struct str buf;
 	str_init (&buf);
 
-	while (buf.len < size_limit)
+	while (buf.len < (size_t) size_limit)
 	{
 		str_ensure_space (&buf, 8192);
 		ssize_t n_read = read (input_fd, buf.str + buf.len,

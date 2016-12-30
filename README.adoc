@@ -6,7 +6,7 @@ hex
 Plans
 -----
 In the future, it should be able to automatically interpret fields within files
-via a set of Lua scripts.
+using a set of Lua scripts.
 
 Packages
 --------
@@ -49,7 +49,7 @@ Create _~/.config/hex/hex.conf_ with contents like the following:
 
 ....
 colors = {
-	header     = ""
+	footer     = ""
 	highlight  = "bold"
 	bar        = "reverse"
 	bar_active = "ul"
@@ -61,11 +61,9 @@ colors = {
 
 Terminal caveats
 ----------------
-This application aspires to be as close to a GUI as possible.  It expects you
-to use the mouse (though it's not required).  Terminals are, however, somewhat
-tricky to get consistent results on, so be aware of the following:
+Terminals are somewhat tricky to get consistent results on, so be aware of the
+following:
 
- - use a UTF-8 locale to get finer resolution progress bars and scrollbars
  - Xterm needs `XTerm*metaSendsEscape: true` for the default bindings to work
  - urxvt's 'vtwheel' plugin sabotages scrolling
 
