@@ -93,7 +93,6 @@ update_curses_terminal_size (void)
 enum
 {
 	ROW_SIZE = 16,                      ///< How many bytes on a row
-	FOOTER_SIZE = 4,                    ///< How many rows form the footer
 };
 
 enum endianity
@@ -114,6 +113,9 @@ static struct app_context
 	struct poller_fd signal_event;      ///< Signal FD event
 
 	// Data:
+
+	char *message;                      ///< Last logged message
+	int message_attr;                   ///< Attributes for the logged message
 
 	struct config config;               ///< Program configuration
 	char *filename;                     ///< Target filename
@@ -251,7 +253,7 @@ app_init_terminal (void)
 	TERMO_CHECK_VERSION;
 	if (!(g_ctx.tk = termo_new (STDIN_FILENO, NULL, 0)))
 		abort ();
-	if (!initscr () || nonl () == ERR || curs_set (1) == ERR)
+	if (!initscr () || nonl () == ERR)
 		abort ();
 
 	// By default we don't use any colors so they're not required...
@@ -280,6 +282,8 @@ app_free_context (void)
 {
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
+
+	free (g_ctx.message);
 
 	free (g_ctx.filename);
 	free (g_ctx.data);
@@ -343,16 +347,16 @@ app_write_line (const char *str, chtype attrs)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static int
-app_visible_items (void)
+app_visible_rows (void)
 {
-	return MAX (0, LINES - FOOTER_SIZE);
+	return MAX (0, LINES - 1 /* bar */ - 3 /* decoder */ - !!g_ctx.message);
 }
 
 static void
 app_draw_view (void)
 {
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
-	for (int y = 0; y < app_visible_items (); y++)
+	for (int y = 0; y < app_visible_rows (); y++)
 	{
 		int64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
 		if (row_addr >= end_addr)
@@ -405,6 +409,8 @@ app_draw_view (void)
 	}
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 static uint64_t
 app_decode (const uint8_t *p, size_t len)
 {
@@ -413,8 +419,8 @@ app_decode (const uint8_t *p, size_t len)
 		for (size_t i = 0; i < len; i++)
 			val = val << 8 | (uint64_t) p[i];
 	else
-		for (size_t i = len; i--; )
-			val = val << 8 | (uint64_t) p[i];
+		while (len--)
+			val = val << 8 | (uint64_t) p[len];
 	return val;
 }
 
@@ -452,7 +458,7 @@ app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
 static void
 app_draw_footer (void)
 {
-	move (app_visible_items (), 0);
+	move (app_visible_rows (), 0);
 
 	// XXX: can we get rid of this and still make it look acceptable?
 	chtype a_normal = APP_ATTR (BAR);
@@ -478,17 +484,24 @@ app_draw_footer (void)
 		"%s  ", g_ctx.endianity == ENDIANITY_LE ? "LE" : "BE");
 
 	int64_t top = g_ctx.view_top;
-	int64_t bot = g_ctx.view_top + app_visible_items () * ROW_SIZE;
+	int64_t bot = g_ctx.view_top + app_visible_rows () * ROW_SIZE;
 	if (top <= g_ctx.data_offset
-	 && bot > g_ctx.data_offset + g_ctx.data_len)
+	 && bot >= g_ctx.data_offset + g_ctx.data_len)
 		str_append (&right, "All");
 	else if (top <= g_ctx.data_offset)
 		str_append (&right, "Top");
-	else if (bot > g_ctx.data_offset + g_ctx.data_len)
+	else if (bot >= g_ctx.data_offset + g_ctx.data_len)
 		str_append (&right, "Bot");
 	else
-		// TODO: position indication in percents
-		str_append (&right, "??%");
+	{
+		int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+		int64_t cur = g_ctx.view_top / ROW_SIZE;
+		int64_t max = (end_addr - 1) / ROW_SIZE - app_visible_rows () + 1;
+
+		cur -= g_ctx.data_offset / ROW_SIZE;
+		max -= g_ctx.data_offset / ROW_SIZE;
+		str_append_printf (&right, "%2d%%", (int) (100 * cur / max));
+	}
 
 	row_buffer_align (&buf, COLS - right.len, a_normal);
 	row_buffer_append (&buf, right.str, a_normal);
@@ -537,6 +550,9 @@ app_draw_footer (void)
 	app_flush_buffer (&x, COLS, APP_ATTR (FOOTER));
 	app_flush_buffer (&u, COLS, APP_ATTR (FOOTER));
 	app_flush_buffer (&s, COLS, APP_ATTR (FOOTER));
+
+	if (g_ctx.message)
+		app_write_line (g_ctx.message, g_ctx.attrs[g_ctx.message_attr].attrs);
 }
 
 static void
@@ -550,9 +566,15 @@ app_on_refresh (void *user_data)
 	app_draw_footer ();
 
 	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
-	int y = diff / ROW_SIZE;
-	int x = diff % ROW_SIZE;
-	move (y, 10 + x*2 + g_ctx.view_skip_nibble + x/8 + x/2);
+	int64_t y = diff / ROW_SIZE;
+	int64_t x = diff % ROW_SIZE;
+	if (y >= 0 && y < app_visible_rows ())
+	{
+		curs_set (1);
+		move (y, 10 + x*2 + g_ctx.view_skip_nibble + x/8 + x/2);
+	}
+	else
+		curs_set (0);
 
 	refresh ();
 }
@@ -572,7 +594,7 @@ app_fix_view_range (void)
 
 	// If the contents are at least as long as the screen, always fill it
 	int64_t max_view_top = ((g_ctx.data_offset + g_ctx.data_len - 1)
-		/ ROW_SIZE - app_visible_items () + 1) * ROW_SIZE;
+		/ ROW_SIZE - app_visible_rows () + 1) * ROW_SIZE;
 	// But don't let that suggest a negative offset
 	max_view_top = MAX (max_view_top, 0);
 
@@ -602,7 +624,7 @@ app_ensure_selection_visible (void)
 		app_scroll (-too_high);
 
 	int too_low = g_ctx.view_cursor / ROW_SIZE
-		- (g_ctx.view_top / ROW_SIZE + app_visible_items () - 1);
+		- (g_ctx.view_top / ROW_SIZE + app_visible_rows () - 1);
 	if (too_low > 0)
 		app_scroll (too_low);
 }
@@ -615,7 +637,7 @@ app_move_selection (int diff)
 	fixed = MAX (fixed, g_ctx.data_offset);
 	fixed = MIN (fixed, g_ctx.data_offset + g_ctx.data_len - 1);
 
-	bool result = g_ctx.view_cursor != fixed;
+	bool result = g_ctx.view_cursor == fixed;
 	g_ctx.view_cursor = fixed;
 	app_invalidate ();
 
@@ -698,12 +720,12 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
-		app_scroll (FOOTER_SIZE - LINES);
-		app_move_selection (FOOTER_SIZE - LINES);
+		app_scroll (-app_visible_rows ());
+		app_move_selection (-app_visible_rows ());
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
-		app_scroll (LINES - FOOTER_SIZE);
-		app_move_selection (LINES - FOOTER_SIZE);
+		app_scroll (app_visible_rows ());
+		app_move_selection (app_visible_rows ());
 		break;
 
 	case ACTION_UP:
@@ -757,28 +779,36 @@ app_process_action (enum action action)
 static bool
 app_process_left_mouse_click (int line, int column)
 {
-	if (line == app_visible_items ())
+	if (line < 0)
+		return false;
+
+	if (line == app_visible_rows ())
 	{
 		if (column <  COLS - 7
 		 || column >= COLS - 5)
 			return false;
-
-		// TODO: LE/BE switch
+		return app_process_action (ACTION_TOGGLE_ENDIANITY);
 	}
-	else if (line < app_visible_items ())
+	else if (line < app_visible_rows ())
 	{
-		if (line < 0)
+		// TODO: employ strict checking here before the autofix
+		int offset;
+		if (column >= 10 && column < 50)
+		{
+			offset = column - 10;
+			offset -= offset/5 + offset/21;
+			g_ctx.view_skip_nibble = offset % 2;
+			offset /= 2;
+		}
+		else if (column >= 52 && column < 68)
+		{
+			offset = column - 52;
+			g_ctx.view_skip_nibble = false;
+		}
+		else
 			return false;
 
-		// TODO: convert and check "column"
-		if (column < 10 || column >= 50)
-			return false;
-
-		int offset = column - 10;
-		offset -= offset/5 + offset/21;
-		g_ctx.view_skip_nibble = (offset & 1) == 1;
-
-		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset / 2;
+		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset;
 		return app_move_selection (0);
 	}
 	return true;
@@ -805,52 +835,69 @@ static struct binding
 {
 	const char *key;                    ///< Key definition
 	enum action action;                 ///< Action to take
+	termo_key_t decoded;                ///< Decoded key definition
 }
 g_default_bindings[] =
 {
-	{ "Escape",     ACTION_QUIT               },
-	{ "q",          ACTION_QUIT               },
-	{ "C-l",        ACTION_REDRAW             },
-	{ "Tab",        ACTION_TOGGLE_ENDIANITY   },
+	{ "Escape",     ACTION_QUIT,               {}},
+	{ "q",          ACTION_QUIT,               {}},
+	{ "C-l",        ACTION_REDRAW,             {}},
+	{ "Tab",        ACTION_TOGGLE_ENDIANITY,   {}},
 
-	{ "Home",       ACTION_GOTO_TOP           },
-	{ "End",        ACTION_GOTO_BOTTOM        },
-	{ "M-<",        ACTION_GOTO_TOP           },
-	{ "M->",        ACTION_GOTO_BOTTOM        },
-	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS },
-	{ "PageDown",   ACTION_GOTO_PAGE_NEXT     },
-	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS },
-	{ "C-f",        ACTION_GOTO_PAGE_NEXT     },
+	{ "Home",       ACTION_GOTO_TOP,           {}},
+	{ "End",        ACTION_GOTO_BOTTOM,        {}},
+	{ "M-<",        ACTION_GOTO_TOP,           {}},
+	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
+	{ "PageUp",     ACTION_GOTO_PAGE_PREVIOUS, {}},
+	{ "PageDown",   ACTION_GOTO_PAGE_NEXT,     {}},
+	{ "C-b",        ACTION_GOTO_PAGE_PREVIOUS, {}},
+	{ "C-f",        ACTION_GOTO_PAGE_NEXT,     {}},
 
-	{ "Up",         ACTION_UP                 },
-	{ "Down",       ACTION_DOWN               },
-	{ "Left",       ACTION_LEFT               },
-	{ "Right",      ACTION_RIGHT              },
-	{ "k",          ACTION_UP                 },
-	{ "j",          ACTION_DOWN               },
-	{ "h",          ACTION_LEFT               },
-	{ "l",          ACTION_RIGHT              },
-	{ "C-p",        ACTION_UP                 },
-	{ "C-n",        ACTION_DOWN               },
+	{ "Up",         ACTION_UP,                 {}},
+	{ "Down",       ACTION_DOWN,               {}},
+	{ "Left",       ACTION_LEFT,               {}},
+	{ "Right",      ACTION_RIGHT,              {}},
+	{ "k",          ACTION_UP,                 {}},
+	{ "j",          ACTION_DOWN,               {}},
+	{ "h",          ACTION_LEFT,               {}},
+	{ "l",          ACTION_RIGHT,              {}},
+	{ "C-p",        ACTION_UP,                 {}},
+	{ "C-n",        ACTION_DOWN,               {}},
 
-	{ "C-y",        ACTION_SCROLL_UP          },
-	{ "C-e",        ACTION_SCROLL_DOWN        },
+	{ "C-y",        ACTION_SCROLL_UP,          {}},
+	{ "C-e",        ACTION_SCROLL_DOWN,        {}},
 };
+
+static int
+app_binding_cmp (const void *a, const void *b)
+{
+	return termo_keycmp (g_ctx.tk,
+		&((struct binding *) a)->decoded, &((struct binding *) b)->decoded);
+}
+
+static void
+app_init_bindings (void)
+{
+	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
+	{
+		struct binding *binding = &g_default_bindings[i];
+		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk,
+			binding->key, &binding->decoded, TERMO_FORMAT_ALTISMETA));
+	}
+	qsort (g_default_bindings, N_ELEMENTS (g_default_bindings),
+		sizeof *g_default_bindings, app_binding_cmp);
+}
 
 static bool
 app_process_termo_event (termo_key_t *event)
 {
-	// TODO: pre-parse the keys, order them by termo_keycmp() and binary search
-	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
-	{
-		struct binding *binding = &g_default_bindings[i];
-		termo_key_t key;
-		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk, binding->key, &key,
-			TERMO_FORMAT_ALTISMETA));
-		if (!termo_keycmp (g_ctx.tk, event, &key))
-			return app_process_action (binding->action);
-	}
-	// TODO: use 0-9 a-f to overwrite nibbles
+	struct binding dummy = { NULL, 0, *event }, *binding =
+		bsearch (&dummy, g_default_bindings, N_ELEMENTS (g_default_bindings),
+			sizeof *g_default_bindings, app_binding_cmp);
+	if (binding)
+		return app_process_action (binding->action);
+
+	// TODO: once we become an editor, use 0-9 a-f to overwrite nibbles
 	return false;
 }
 
@@ -1006,10 +1053,10 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 		fprintf (stderr, "%s\n", message.str);
 	else
 	{
-		// TODO: think of a location to print this, maybe over decoding fields
-		// TODO: remember the position and restore it
-		move (LINES - 1, 0);
-		app_write_line (message.str, A_REVERSE);
+		free (g_ctx.message);
+		g_ctx.message = xstrdup (message.str);
+		g_ctx.message_attr = (intptr_t) user_data;
+		app_invalidate ();
 	}
 	str_free (&message);
 
@@ -1179,6 +1226,7 @@ main (int argc, char *argv[])
 	signals_setup_handlers ();
 	app_init_poller_events ();
 	app_invalidate ();
+	app_init_bindings ();
 
 	// Redirect all messages from liberty so that they don't disrupt display
 	g_log_message_real = app_log_handler;
