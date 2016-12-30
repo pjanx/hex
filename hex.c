@@ -353,59 +353,61 @@ app_visible_rows (void)
 }
 
 static void
+app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
+{
+	char *row_addr_str = xstrdup_printf ("%08" PRIx64, addr);
+	row_buffer_append (buf, row_addr_str, attrs);
+	free (row_addr_str);
+
+	struct str ascii;
+	str_init (&ascii);
+	str_append (&ascii, "  ");
+
+	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	for (int x = 0; x < ROW_SIZE; x++)
+	{
+		if (x % 8 == 0) row_buffer_append (buf, " ", attrs);
+		if (x % 2 == 0) row_buffer_append (buf, " ", attrs);
+
+		int64_t cell_addr = addr + x;
+		if (cell_addr < g_ctx.data_offset
+		 || cell_addr >= end_addr)
+		{
+			row_buffer_append (buf, "  ", attrs);
+			str_append_c (&ascii, ' ');
+		}
+		else
+		{
+			uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
+			char *hex = xstrdup_printf ("%02x", cell);
+			row_buffer_append (buf, hex, attrs);
+			free (hex);
+
+			str_append_c (&ascii, (cell >= 32 && cell < 127) ? cell : '.');
+		}
+	}
+	row_buffer_append (buf, ascii.str, attrs);
+	str_free (&ascii);
+}
+
+static void
 app_draw_view (void)
 {
+	move (0, 0);
+
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	for (int y = 0; y < app_visible_rows (); y++)
 	{
-		int64_t row_addr = g_ctx.view_top + y * ROW_SIZE;
-		if (row_addr >= end_addr)
+		int64_t addr = g_ctx.view_top + y * ROW_SIZE;
+		if (addr >= end_addr)
 			break;
 
-		int row_attrs = (row_addr / ROW_SIZE & 1)
-			? APP_ATTR (ODD) : APP_ATTR (EVEN);
+		int attrs = (addr / ROW_SIZE & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
 
 		struct row_buffer buf;
 		row_buffer_init (&buf);
-
-		char *row_addr_str = xstrdup_printf ("%08" PRIx64, row_addr);
-		row_buffer_append (&buf, row_addr_str, row_attrs);
-		free (row_addr_str);
-
-		struct str ascii;
-		str_init (&ascii);
-		str_append (&ascii, "  ");
-
-		for (int x = 0; x < ROW_SIZE; x++)
-		{
-			if (x % 8 == 0) row_buffer_append (&buf, " ", row_attrs);
-			if (x % 2 == 0) row_buffer_append (&buf, " ", row_attrs);
-
-			int64_t cell_addr = row_addr + x;
-			if (cell_addr < g_ctx.data_offset
-			 || cell_addr >= end_addr)
-			{
-				row_buffer_append (&buf, "  ", row_attrs);
-				str_append_c (&ascii, ' ');
-			}
-			else
-			{
-				uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
-				char *hex = xstrdup_printf ("%02x", cell);
-				row_buffer_append (&buf, hex, row_attrs);
-				free (hex);
-
-				if (cell >= 32 && cell < 127)
-					str_append_c (&ascii, cell);
-				else
-					str_append_c (&ascii, '.');
-			}
-		}
-		row_buffer_append (&buf, ascii.str, row_attrs);
-		str_free (&ascii);
-
-		move (y, 0);
-		app_flush_buffer (&buf, COLS, row_attrs);
+		app_make_row (&buf, addr, attrs);
+		app_flush_buffer (&buf, COLS, attrs);
 	}
 }
 
@@ -460,28 +462,22 @@ app_draw_footer (void)
 {
 	move (app_visible_rows (), 0);
 
-	// XXX: can we get rid of this and still make it look acceptable?
-	chtype a_normal = APP_ATTR (BAR);
-	chtype a_active = APP_ATTR (BAR_HL);
-
 	struct row_buffer buf;
 	row_buffer_init (&buf);
-
-	row_buffer_append (&buf, APP_TITLE, a_normal);
+	row_buffer_append (&buf, APP_TITLE, APP_ATTR (BAR));
 
 	if (g_ctx.filename)
 	{
-		row_buffer_append (&buf, "  ", a_normal);
+		row_buffer_append (&buf, "  ", APP_ATTR (BAR));
 		char *filename = (char *) u8_strconv_from_locale (g_ctx.filename);
-		row_buffer_append (&buf, filename, a_active);
+		row_buffer_append (&buf, filename, APP_ATTR (BAR_HL));
 		free (filename);
 	}
 
 	struct str right;
 	str_init (&right);
-	str_append_printf (&right, "%08" PRIx64 "  ", g_ctx.view_cursor);
-	str_append_printf (&right,
-		"%s  ", g_ctx.endianity == ENDIANITY_LE ? "LE" : "BE");
+	str_append_printf (&right, "  %08" PRIx64, g_ctx.view_cursor);
+	str_append (&right, g_ctx.endianity == ENDIANITY_LE ? "  LE  " : "  BE  ");
 
 	int64_t top = g_ctx.view_top;
 	int64_t bot = g_ctx.view_top + app_visible_rows () * ROW_SIZE;
@@ -503,9 +499,9 @@ app_draw_footer (void)
 		str_append_printf (&right, "%2d%%", (int) (100 * cur / max));
 	}
 
-	row_buffer_align (&buf, COLS - right.len, a_normal);
-	row_buffer_append (&buf, right.str, a_normal);
-	app_flush_buffer (&buf, COLS, a_normal);
+	row_buffer_align (&buf, COLS - right.len, APP_ATTR (BAR));
+	row_buffer_append (&buf, right.str, APP_ATTR (BAR));
+	app_flush_buffer (&buf, COLS, APP_ATTR (BAR));
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	if (g_ctx.view_cursor < g_ctx.data_offset
@@ -585,16 +581,18 @@ app_on_refresh (void *user_data)
 static bool
 app_fix_view_range (void)
 {
-	if (g_ctx.view_top < g_ctx.data_offset / ROW_SIZE * ROW_SIZE)
+	int64_t data_view_start = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
+	if (g_ctx.view_top < data_view_start)
 	{
-		g_ctx.view_top = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
+		g_ctx.view_top = data_view_start;
 		app_invalidate ();
 		return false;
 	}
 
 	// If the contents are at least as long as the screen, always fill it
-	int64_t max_view_top = ((g_ctx.data_offset + g_ctx.data_len - 1)
-		/ ROW_SIZE - app_visible_rows () + 1) * ROW_SIZE;
+	int64_t last_byte = g_ctx.data_offset + g_ctx.data_len - 1;
+	int64_t max_view_top =
+		(last_byte / ROW_SIZE - app_visible_rows () + 1) * ROW_SIZE;
 	// But don't let that suggest a negative offset
 	max_view_top = MAX (max_view_top, 0);
 
@@ -623,14 +621,14 @@ app_ensure_selection_visible (void)
 	if (too_high > 0)
 		app_scroll (-too_high);
 
-	int too_low = g_ctx.view_cursor / ROW_SIZE
-		- (g_ctx.view_top / ROW_SIZE + app_visible_rows () - 1);
+	int too_low = g_ctx.view_cursor / ROW_SIZE - g_ctx.view_top / ROW_SIZE
+		- app_visible_rows () + 1;
 	if (too_low > 0)
 		app_scroll (too_low);
 }
 
 static bool
-app_move_selection (int diff)
+app_move_cursor_by_rows (int diff)
 {
 	// TODO: disallow partial up/down movement
 	int64_t fixed = g_ctx.view_cursor += diff * ROW_SIZE;
@@ -649,23 +647,12 @@ app_move_selection (int diff)
 
 enum action
 {
-	ACTION_NONE,
-	ACTION_QUIT,
-	ACTION_REDRAW,
+	ACTION_NONE, ACTION_QUIT, ACTION_REDRAW, ACTION_TOGGLE_ENDIANITY,
 
-	ACTION_TOGGLE_ENDIANITY,
+	ACTION_SCROLL_UP,   ACTION_GOTO_TOP,    ACTION_GOTO_PAGE_PREVIOUS,
+	ACTION_SCROLL_DOWN, ACTION_GOTO_BOTTOM, ACTION_GOTO_PAGE_NEXT,
 
-	ACTION_SCROLL_UP,
-	ACTION_SCROLL_DOWN,
-	ACTION_GOTO_TOP,
-	ACTION_GOTO_BOTTOM,
-	ACTION_GOTO_PAGE_PREVIOUS,
-	ACTION_GOTO_PAGE_NEXT,
-
-	ACTION_UP,
-	ACTION_DOWN,
-	ACTION_LEFT,
-	ACTION_RIGHT,
+	ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT,
 
 	ACTION_COUNT
 };
@@ -677,31 +664,9 @@ app_process_action (enum action action)
 {
 	switch (action)
 	{
-	case ACTION_QUIT:
-		app_quit ();
-		break;
-	case ACTION_REDRAW:
-		clear ();
-		app_invalidate ();
-		break;
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-	case ACTION_TOGGLE_ENDIANITY:
-		g_ctx.endianity = (g_ctx.endianity == ENDIANITY_LE)
-			? ENDIANITY_BE : ENDIANITY_LE;
-		app_invalidate ();
-		break;
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 		// XXX: these should rather be parametrized
-	case ACTION_SCROLL_UP:
-		app_scroll (-1);
-		break;
-	case ACTION_SCROLL_DOWN:
-		app_scroll (1);
-		break;
+	case ACTION_SCROLL_UP:   app_scroll (-1); break;
+	case ACTION_SCROLL_DOWN: app_scroll  (1); break;
 
 	case ACTION_GOTO_TOP:
 		g_ctx.view_cursor = g_ctx.data_offset;
@@ -711,7 +676,7 @@ app_process_action (enum action action)
 		break;
 	case ACTION_GOTO_BOTTOM:
 		if (!g_ctx.data_len)
-			break;
+			return false;
 
 		g_ctx.view_cursor = g_ctx.data_offset + g_ctx.data_len - 1;
 		g_ctx.view_skip_nibble = false;
@@ -721,19 +686,16 @@ app_process_action (enum action action)
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
 		app_scroll (-app_visible_rows ());
-		app_move_selection (-app_visible_rows ());
+		app_move_cursor_by_rows (-app_visible_rows ());
 		break;
 	case ACTION_GOTO_PAGE_NEXT:
 		app_scroll (app_visible_rows ());
-		app_move_selection (app_visible_rows ());
+		app_move_cursor_by_rows (app_visible_rows ());
 		break;
 
-	case ACTION_UP:
-		app_move_selection (-1);
-		break;
-	case ACTION_DOWN:
-		app_move_selection (1);
-		break;
+	case ACTION_UP:   app_move_cursor_by_rows (-1); break;
+	case ACTION_DOWN: app_move_cursor_by_rows  (1); break;
+
 	case ACTION_LEFT:
 		if (g_ctx.view_skip_nibble)
 			g_ctx.view_skip_nibble = false;
@@ -744,8 +706,8 @@ app_process_action (enum action action)
 
 			g_ctx.view_skip_nibble = true;
 			g_ctx.view_cursor--;
+			app_ensure_selection_visible ();
 		}
-		app_ensure_selection_visible ();
 		app_invalidate ();
 		break;
 	case ACTION_RIGHT:
@@ -758,17 +720,26 @@ app_process_action (enum action action)
 
 			g_ctx.view_skip_nibble = false;
 			g_ctx.view_cursor++;
+			app_ensure_selection_visible ();
 		}
-		app_ensure_selection_visible ();
 		app_invalidate ();
 		break;
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
+	case ACTION_QUIT:
+		app_quit ();
 	case ACTION_NONE:
 		break;
+	case ACTION_REDRAW:
+		clear ();
+		app_invalidate ();
+		break;
+
+	case ACTION_TOGGLE_ENDIANITY:
+		g_ctx.endianity = (g_ctx.endianity == ENDIANITY_LE)
+			? ENDIANITY_BE : ENDIANITY_LE;
+		app_invalidate ();
+		break;
 	default:
-		beep ();
 		return false;
 	}
 	return true;
@@ -809,7 +780,7 @@ app_process_left_mouse_click (int line, int column)
 			return false;
 
 		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset;
-		return app_move_selection (0);
+		return app_move_cursor_by_rows (0);
 	}
 	return true;
 }
@@ -986,12 +957,13 @@ app_on_tty_readable (const struct pollfd *fd, void *user_data)
 	{
 		int y, x, button;
 		termo_mouse_event_t type;
+		bool success;
 		if (termo_interpret_mouse (g_ctx.tk, &event, &type, &button, &y, &x))
-		{
-			if (!app_process_mouse (type, y, x, button))
-				beep ();
-		}
-		else if (!app_process_termo_event (&event))
+			success = app_process_mouse (type, y, x, button);
+		else
+			success = app_process_termo_event (&event);
+
+		if (!success)
 			beep ();
 	}
 
