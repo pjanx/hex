@@ -405,6 +405,50 @@ app_draw_view (void)
 	}
 }
 
+static uint64_t
+app_decode (const uint8_t *p, size_t len)
+{
+	uint64_t val = 0;
+	if (g_ctx.endianity == ENDIANITY_BE)
+		for (size_t i = 0; i < len; i++)
+			val = val << 8 | (uint64_t) p[i];
+	else
+		for (size_t i = len; i--; )
+			val = val << 8 | (uint64_t) p[i];
+	return val;
+}
+
+static void
+app_write_footer (struct row_buffer *b, char id, int len, const char *fmt, ...)
+	ATTRIBUTE_PRINTF (4, 5);
+
+static void
+app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
+{
+	const char *coding;
+	if (len <= 1)
+		coding = "";
+	else if (g_ctx.endianity == ENDIANITY_LE)
+		coding = "le";
+	else if (g_ctx.endianity == ENDIANITY_BE)
+		coding = "be";
+
+	char *key = xstrdup_printf ("%c%d%s", id, len * 8, coding);
+	row_buffer_append (b, key, APP_ATTR (HIGHLIGHT));
+	free (key);
+
+	struct str value;
+	str_init (&value);
+
+	va_list ap;
+	va_start (ap, fmt);
+	str_append_vprintf (&value, fmt, ap);
+	va_end (ap);
+
+	row_buffer_append (b, value.str, APP_ATTR (FOOTER));
+	str_free (&value);
+}
+
 static void
 app_draw_footer (void)
 {
@@ -455,69 +499,44 @@ app_draw_footer (void)
 	 || g_ctx.view_cursor >= end_addr)
 		return;
 
-	struct str x; str_init (&x);
-	struct str u; str_init (&u);
-	struct str s; str_init (&s);
-
 	int64_t len = end_addr - g_ctx.view_cursor;
 	uint8_t *p = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
 
-	// TODO: make the headers bold
-	const char *coding = g_ctx.endianity == ENDIANITY_LE ? "le" : "be";
-	uint64_t val;
+	struct row_buffer x; row_buffer_init (&x);
+	struct row_buffer u; row_buffer_init (&u);
+	struct row_buffer s; row_buffer_init (&s);
+
 	if (len >= 1)
 	{
-		str_append_printf (&x, "x8   %02x", (uint8_t) p[0]);
-		str_append_printf (&u, "u8 %4u", (uint8_t) p[0]);
-		str_append_printf (&s, "s8 %4d", (int8_t) p[0]);
+		app_footer_field (&x, 'x', 1, "   %02x  ", p[0]);
+		app_footer_field (&u, 'u', 1, " %4u  ", p[0]);
+		app_footer_field (&s, 's', 1, " %4d  ", (int8_t) p[0]);
 	}
 	if (len >= 2)
 	{
-		if (g_ctx.endianity == ENDIANITY_BE)
-			val = p[1] | p[0] << 8;
-		else
-			val = p[0] | p[1] << 8;
-
-		str_append_printf (&x, "  x16%s   %04x", coding, (uint16_t) val);
-		str_append_printf (&u, "  u16%s %6u", coding, (uint16_t) val);
-		str_append_printf (&s, "  s16%s %6d", coding, (int16_t) val);
+		uint16_t val = app_decode (p, 2);
+		app_footer_field (&x, 'x', 2, "   %04x  ", val);
+		app_footer_field (&u, 'u', 2, " %6u  ", val);
+		app_footer_field (&s, 's', 2, " %6d  ", (int16_t) val);
 	}
 	if (len >= 4)
 	{
-		if (g_ctx.endianity == ENDIANITY_BE)
-			val = p[3] | p[2] << 8 | p[1] << 16 | p[0] << 24;
-		else
-			val = p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24;
-
-		str_append_printf (&x, "  x32%s    %08x", coding, (uint32_t) val);
-		str_append_printf (&u, "  u32%s %11u", coding, (uint32_t) val);
-		str_append_printf (&s, "  s32%s %11d", coding, (int32_t) val);
+		uint32_t val = app_decode (p, 4);
+		app_footer_field (&x, 'x', 4, "    %08x  ", val);
+		app_footer_field (&u, 'u', 4, " %11u  ", val);
+		app_footer_field (&s, 's', 4, " %11d  ", (int32_t) val);
 	}
 	if (len >= 8)
 	{
-		if (g_ctx.endianity == ENDIANITY_BE)
-			val = (uint64_t) p[7]       | (uint64_t) p[6] <<  8
-				| (uint64_t) p[5] << 16 | (uint64_t) p[4] << 24
-				| (uint64_t) p[3] << 32 | (uint64_t) p[2] << 40
-				| (uint64_t) p[1] << 48 | (uint64_t) p[0] << 56;
-		else
-			val = (uint64_t) p[0]       | (uint64_t) p[1] <<  8
-				| (uint64_t) p[2] << 16 | (uint64_t) p[3] << 24
-				| (uint64_t) p[4] << 32 | (uint64_t) p[5] << 40
-				| (uint64_t) p[6] << 48 | (uint64_t) p[7] << 56;
-
-		str_append_printf (&x, "  x64%s     %016" PRIx64, coding, val);
-		str_append_printf (&u, "  u64%s %20" PRIu64, coding, val);
-		str_append_printf (&s, "  s64%s %20" PRId64, coding, (int64_t) val);
+		uint64_t val = app_decode (p, 8);
+		app_footer_field (&x, 'x', 8, "     %016" PRIx64, val);
+		app_footer_field (&u, 'u', 8, " %20" PRIu64, val);
+		app_footer_field (&s, 's', 8, " %20" PRId64, (int64_t) val);
 	}
 
-	app_write_line (x.str, APP_ATTR (FOOTER));
-	app_write_line (u.str, APP_ATTR (FOOTER));
-	app_write_line (s.str, APP_ATTR (FOOTER));
-
-	str_free (&x);
-	str_free (&u);
-	str_free (&s);
+	app_flush_buffer (&x, COLS, APP_ATTR (FOOTER));
+	app_flush_buffer (&u, COLS, APP_ATTR (FOOTER));
+	app_flush_buffer (&s, COLS, APP_ATTR (FOOTER));
 }
 
 static void
