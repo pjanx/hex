@@ -1345,6 +1345,19 @@ app_move_cursor_by_rows (int diff)
 	return result;
 }
 
+static bool
+app_jump_to_marks (ssize_t i)
+{
+	if (i < 0 || (size_t) i >= g_ctx.marks_by_offset_len)
+		return false;
+
+	g_ctx.view_cursor = g_ctx.marks_by_offset[i].offset;
+	g_ctx.view_skip_nibble = false;
+	app_invalidate ();
+	app_ensure_selection_visible ();
+	return true;
+}
+
 // --- User input handling -----------------------------------------------------
 
 enum action
@@ -1355,6 +1368,8 @@ enum action
 	ACTION_SCROLL_DOWN, ACTION_GOTO_BOTTOM, ACTION_GOTO_PAGE_NEXT,
 
 	ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT,
+
+	ACTION_FIELD_PREVIOUS, ACTION_FIELD_NEXT,
 
 	ACTION_COUNT
 };
@@ -1426,6 +1441,17 @@ app_process_action (enum action action)
 		}
 		app_invalidate ();
 		break;
+
+	case ACTION_FIELD_PREVIOUS:
+	{
+		ssize_t i = app_find_marks (g_ctx.view_cursor);
+		if (i >= 0 && (size_t) i < g_ctx.marks_by_offset_len
+		 && g_ctx.marks_by_offset[i].offset == g_ctx.view_cursor)
+			i--;
+		return app_jump_to_marks (i);
+	}
+	case ACTION_FIELD_NEXT:
+		return app_jump_to_marks (app_find_marks (g_ctx.view_cursor) + 1);
 
 	case ACTION_QUIT:
 		app_quit ();
@@ -1538,6 +1564,9 @@ g_default_bindings[] =
 	{ "l",          ACTION_RIGHT,              {}},
 	{ "C-p",        ACTION_UP,                 {}},
 	{ "C-n",        ACTION_DOWN,               {}},
+
+	{ "b",          ACTION_FIELD_PREVIOUS,     {}},
+	{ "w",          ACTION_FIELD_NEXT,         {}},
 
 	{ "C-y",        ACTION_SCROLL_UP,          {}},
 	{ "C-e",        ACTION_SCROLL_DOWN,        {}},
