@@ -1006,7 +1006,11 @@ static int
 app_lua_chunk_mark (lua_State *L)
 {
 	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
-	app_lua_mark (self->offset, self->len, luaL_checkstring (L, 2));
+	int n_args = lua_gettop (L);
+	lua_rawgeti (L, LUA_REGISTRYINDEX, g_ctx.ref_format);
+	lua_insert (L, 2);
+	lua_call (L, n_args - 1, 1);
+	app_lua_mark (self->offset, self->len, luaL_checkstring (L, -1));
 	return 0;
 }
 
