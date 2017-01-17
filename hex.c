@@ -68,6 +68,14 @@ enum
 #include "tui.c"
 #include "termo.h"
 
+#ifdef HAVE_LUA
+#include <lua.h>
+#include <lualib.h>
+#include <lauxlib.h>
+
+#include <dirent.h>
+#endif // HAVE_LUA
+
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
 
 // --- Utilities ---------------------------------------------------------------
@@ -156,6 +164,12 @@ static struct app_context
 
 	struct poller_fd tty_event;         ///< Terminal input event
 	struct poller_fd signal_event;      ///< Signal FD event
+
+#ifdef HAVE_LUA
+	lua_State *L;                       ///< Lua state
+	int ref_format;                     ///< Reference to "string.format"
+	struct str_map coders;              ///< Map of coders by name
+#endif // HAVE_LUA
 
 	// Data:
 
@@ -777,6 +791,492 @@ app_on_refresh (void *user_data)
 	refresh ();
 }
 
+// --- Lua ---------------------------------------------------------------------
+
+#ifdef HAVE_LUA
+
+static void *
+app_lua_alloc (void *ud, void *ptr, size_t o_size, size_t n_size)
+{
+	(void) ud;
+	(void) o_size;
+
+	if (n_size)
+		return realloc (ptr, n_size);
+
+	free (ptr);
+	return NULL;
+}
+
+static int
+app_lua_panic (lua_State *L)
+{
+	// XXX: we might be able to do something better
+	print_fatal ("Lua panicked: %s", lua_tostring (L, -1));
+	lua_close (L);
+	exit (EXIT_FAILURE);
+	return 0;
+}
+
+static bool
+app_lua_getfield (lua_State *L, int idx, const char *name,
+	int expected, bool optional)
+{
+	int found = lua_getfield (L, idx, name);
+	if (found == expected)
+		return true;
+	if (optional && found == LUA_TNIL)
+		return false;
+
+	const char *message = optional
+		? "invalid field \"%s\" (found: %s, expected: %s or nil)"
+		: "invalid or missing field \"%s\" (found: %s, expected: %s)";
+	return luaL_error (L, message, name,
+		lua_typename (L, found), lua_typename (L, expected));
+}
+
+static int
+app_lua_error_handler (lua_State *L)
+{
+	luaL_traceback (L, L, luaL_checkstring (L, 1), 1);
+	return 1;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+struct app_lua_coder
+{
+	int ref_detect;                     ///< Reference to the "detect" method
+	int ref_decode;                     ///< Reference to the "decode" method
+};
+
+static void
+app_lua_coder_free (void *coder)
+{
+	struct app_lua_coder *self = coder;
+	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_decode);
+	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_detect);
+}
+
+static int
+app_lua_register (lua_State *L)
+{
+	luaL_checktype (L, 1, LUA_TTABLE);
+
+	(void) app_lua_getfield (L, 1, "type",   LUA_TSTRING,   false);
+	const char *type = lua_tostring (L, -1);
+	if (str_map_find (&g_ctx.coders, type))
+		luaL_error (L, "a coder has already been registered for `%s'", type);
+
+	(void) app_lua_getfield (L, 1, "detect", LUA_TFUNCTION, true);
+	(void) app_lua_getfield (L, 1, "decode", LUA_TFUNCTION, false);
+
+	struct app_lua_coder *coder = xcalloc (1, sizeof *coder);
+	coder->ref_decode = luaL_ref (L, LUA_REGISTRYINDEX);
+	coder->ref_detect = luaL_ref (L, LUA_REGISTRYINDEX);
+	str_map_set (&g_ctx.coders, type, coder);
+	return 0;
+}
+
+static luaL_Reg app_lua_library[] =
+{
+	{ "register", app_lua_register },
+	{ NULL,       NULL             }
+};
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+#define XLUA_CHUNK_METATABLE "chunk"
+
+struct app_lua_chunk
+{
+	int64_t offset;                     ///< Offset from start of file
+	int64_t len;                        ///< Length of the sequence
+
+	int64_t position;                   ///< Read position in the sequence
+	enum endianity endianity;           ///< Read endianity
+};
+
+static struct app_lua_chunk *
+app_lua_chunk_new (lua_State *L)
+{
+	struct app_lua_chunk *chunk = lua_newuserdata (L, sizeof *chunk);
+	luaL_setmetatable (L, XLUA_CHUNK_METATABLE);
+	memset (chunk, 0, sizeof *chunk);
+	return chunk;
+}
+
+static int
+app_lua_chunk_len (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	lua_pushinteger (L, self->len);
+	return 0;
+}
+
+/// Create a new subchunk following Lua's string.sub() semantics.
+/// An implication is that it is not possible to go extend a chunk's bounds.
+static int
+app_lua_chunk_call (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	lua_Integer start = luaL_optinteger (L, 2,  1);
+	lua_Integer end   = luaL_optinteger (L, 3, -1);
+
+	if (start < 0) start += self->len + 1;
+	if (end   < 0) end   += self->len + 1;
+
+	start = MAX (start, 1);
+	end = MIN (end, self->len);
+
+	struct app_lua_chunk *clone = app_lua_chunk_new (L);
+	clone->position = 0;
+	clone->endianity = self->endianity;
+	if (start > end)
+	{
+		// "start" can be too high and "end" can be too low;
+		// the length is zero, so the offset doesn't matter much anyway
+		clone->offset = self->offset;
+		clone->len = 0;
+	}
+	else
+	{
+		clone->offset = self->offset + start - 1;
+		clone->len = end - start + 1;
+	}
+	return 1;
+}
+
+static int
+app_lua_chunk_index (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	const char *key = luaL_checkstring (L, 2);
+	if (luaL_getmetafield (L, 1, key))
+		return 1;
+
+	if (!strcmp (key, "offset"))
+		lua_pushinteger (L, self->offset);
+	else if (!strcmp (key, "endianity"))
+		lua_pushstring (L, self->endianity == ENDIANITY_LE ? "le" : "be");
+	else if (!strcmp (key, "position"))
+		lua_pushinteger (L, self->position + 1);
+	else if (!strcmp (key, "eof"))
+		lua_pushboolean (L, self->position >= self->len);
+	else
+		return luaL_argerror (L, 2, "not a readable property");
+	return 1;
+}
+
+static int
+app_lua_chunk_newindex (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	const char *key = luaL_checkstring (L, 2);
+	if (!strcmp (key, "endianity"))
+	{
+		// Needs to be in the enum order
+		const char *options[] = { "le", "be" };
+		self->endianity = luaL_checkoption (L, 3, options[0], options);
+	}
+	else if (!strcmp (key, "position"))
+	{
+		lua_Integer position = luaL_checkinteger (L, 3) - 1;
+		if (position < 1 || position > self->len + 1)
+			return luaL_error (L, "position out of range: %" PRId64, position);
+		self->position = position - 1;
+	}
+	else
+		return luaL_argerror (L, 2, "not a writable property");
+	return 0;
+}
+
+static void
+app_lua_mark (int64_t offset, int64_t len, const char *desc)
+{
+	ARRAY_RESERVE (g_ctx.marks, 1);
+	g_ctx.marks[g_ctx.marks_len++] =
+		(struct mark) { offset, len, g_ctx.mark_strings.len };
+
+	str_append (&g_ctx.mark_strings, desc);
+	str_append_c (&g_ctx.mark_strings, 0);
+}
+
+static int
+app_lua_chunk_mark (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	app_lua_mark (self->offset, self->len, luaL_checkstring (L, 2));
+	return 0;
+}
+
+/// Try to detect any registered type in the data and return its name
+static int
+app_lua_chunk_identify (lua_State *L)
+{
+	(void) luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+
+	struct str_map_iter iter;
+	str_map_iter_init (&iter, &g_ctx.coders);
+	struct app_lua_coder *coder;
+	while ((coder = str_map_iter_next (&iter)))
+	{
+		lua_rawgeti (L, LUA_REGISTRYINDEX, coder->ref_detect);
+
+		// Clone the chunk first to reset its read position
+		lua_pushcfunction (L, app_lua_chunk_call);
+		lua_pushvalue (L, 1);
+		lua_call (L, 1, 1);
+
+		lua_call (L, 1, 1);
+		if (lua_toboolean (L, -1))
+		{
+			lua_pushstring (L, iter.link->key);
+			return 1;
+		}
+		lua_pop (L, 1);
+	}
+	return 0;
+}
+
+static int
+app_lua_chunk_decode (lua_State *L)
+{
+	(void) luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	const char *type = luaL_optstring (L, 2, NULL);
+	// TODO: further arguments should be passed to the decoding function
+
+	if (!type)
+	{
+		lua_pushcfunction (L, app_lua_chunk_identify);
+		lua_pushvalue (L, 1);
+		lua_call (L, 1, 1);
+		type = lua_tostring (L, -1);
+	}
+	// Can't identify -> can't decode, nothing to do here
+	if (!type)
+		return 0;
+
+	// While we could call "detect" here, just to be sure, some kinds may not
+	// even be detectable and it's better to leave it up to the plugin
+
+	struct app_lua_coder *coder = str_map_find (&g_ctx.coders, type);
+	if (!coder)
+		return luaL_error (L, "unknown type: %s", type);
+
+	lua_rawgeti (L, LUA_REGISTRYINDEX, coder->ref_decode);
+	lua_pushvalue (L, 1);
+	// TODO: the chunk could remember the name of the coder and prepend it
+	//   to all marks set from the callback; then reset it back to NULL
+	lua_call (L, 1, 0);
+	return 0;
+}
+
+static int
+app_lua_chunk_read (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	lua_Integer len = luaL_checkinteger (L, 2);
+	if (len < 0)
+		return luaL_argerror (L, 2, "invalid read length");
+
+	int64_t start = self->offset + self->position;
+	// XXX: or just return a shorter string in this case?
+	if (start + len > g_ctx.data_offset + g_ctx.data_len)
+		return luaL_argerror (L, 2, "chunk is too short");
+
+	lua_pushlstring (L, (char *) g_ctx.data + (start - g_ctx.data_offset), len);
+	self->position += len;
+	return 1;
+}
+
+/// Mark a field that has just been read from the chunk and advance position:
+///  - the second argument, if present, is a simple format string for marking;
+///  - the third argument, if present, is a filtering function.
+///
+/// I am aware of how ugly the implicit "string.format" is.  Convenience wins.
+static void
+app_lua_chunk_finish_read
+	(lua_State *L, struct app_lua_chunk *self, int64_t len)
+{
+	int n_args = lua_gettop (L) - 1;
+	if (n_args < 2)
+		return;
+
+	// Prepare <string.format>, <format>, <value>
+	lua_rawgeti (L, LUA_REGISTRYINDEX, g_ctx.ref_format);
+	lua_pushvalue (L, 2);
+
+	int pre_filter_top = lua_gettop (L);
+	lua_pushvalue (L, -3);
+
+	// Transform the value if a filtering function is provided
+	if (n_args >= 3)
+	{
+		lua_pushvalue (L, 3);
+		lua_insert (L, -2);
+		lua_call (L, 1, LUA_MULTRET);
+		int n_ret = lua_gettop (L) - pre_filter_top;
+
+		// When no value has been returned, keep the old one
+		if (n_ret < 1)
+			lua_pushvalue (L, pre_filter_top - 2);
+
+		// Forward multiple return values to "string.format"
+		if (n_ret > 1)
+		{
+			lua_pushvalue (L, pre_filter_top - 1);
+			lua_insert (L, -n_ret - 1);
+			lua_call (L, n_ret, 1);
+		}
+	}
+
+	lua_call (L, 2, 1);
+	app_lua_mark (self->offset + self->position, len, lua_tostring (L, -1));
+	self->position += len;
+	lua_pop (L, 1);
+}
+
+static int
+app_lua_chunk_cstring (lua_State *L)
+{
+	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
+	void *s = g_ctx.data + (self->offset - g_ctx.data_offset) + self->position;
+
+	void *nil;
+	if (!(nil = memchr (s, '\0', self->len - self->position)))
+		return luaL_error (L, "unexpected EOF");
+
+	lua_pushlstring (L, s, nil - s);
+	app_lua_chunk_finish_read (L, self, nil - s + 1);
+	return 1;
+}
+
+/// Decode "len" bytes as a number starting at the current position in "self"
+static uint64_t
+app_lua_chunk_decode_int (lua_State *L, struct app_lua_chunk *self, size_t len)
+{
+	if (self->position + (int64_t) len > self->len)
+		return luaL_error (L, "unexpected EOF");
+
+	void *s = g_ctx.data + (self->offset - g_ctx.data_offset) + self->position;
+	return app_decode (s, len, self->endianity);
+}
+
+#define APP_LUA_CHUNK_INT(name, type)                                          \
+	static int                                                                 \
+	app_lua_chunk_ ## name (lua_State *L)                                      \
+	{                                                                          \
+		struct app_lua_chunk *self =                                           \
+			luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);                      \
+		type v = app_lua_chunk_decode_int (L, self, sizeof v);                 \
+		lua_pushinteger (L, v);                                                \
+		app_lua_chunk_finish_read (L, self, sizeof v);                         \
+		return 1;                                                              \
+	}
+
+APP_LUA_CHUNK_INT (u8,  uint8_t)  APP_LUA_CHUNK_INT (s8,  int8_t)
+APP_LUA_CHUNK_INT (u16, uint16_t) APP_LUA_CHUNK_INT (s16, int16_t)
+APP_LUA_CHUNK_INT (u32, uint32_t) APP_LUA_CHUNK_INT (s32, int32_t)
+APP_LUA_CHUNK_INT (u64, uint64_t) APP_LUA_CHUNK_INT (s64, int64_t)
+
+static luaL_Reg app_lua_chunk_table[] =
+{
+	{ "__len",      app_lua_chunk_len      },
+	{ "__call",     app_lua_chunk_call     },
+	{ "__index",    app_lua_chunk_index    },
+	{ "__newindex", app_lua_chunk_newindex },
+	{ "mark",       app_lua_chunk_mark     },
+	{ "identify",   app_lua_chunk_identify },
+	{ "decode",     app_lua_chunk_decode   },
+
+	{ "read",       app_lua_chunk_read     },
+	{ "cstring",    app_lua_chunk_cstring  },
+	{ "u8",         app_lua_chunk_u8       },
+	{ "s8",         app_lua_chunk_s8       },
+	{ "u16",        app_lua_chunk_u16      },
+	{ "s16",        app_lua_chunk_s16      },
+	{ "u32",        app_lua_chunk_u32      },
+	{ "s32",        app_lua_chunk_s32      },
+	{ "u64",        app_lua_chunk_u64      },
+	{ "s64",        app_lua_chunk_s64      },
+	{ NULL,         NULL                   }
+};
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+app_lua_load_plugins (const char *plugin_dir)
+{
+	DIR *dir;
+	if (!(dir = opendir (plugin_dir)))
+	{
+		if (errno != ENOENT)
+			print_error ("cannot open directory `%s': %s",
+				plugin_dir, strerror (errno));
+		return;
+	}
+
+	struct dirent *iter;
+	while ((errno = 0, iter = readdir (dir)))
+	{
+		const char *dot = strrchr (iter->d_name, '.');
+		if (!dot || strcmp (dot, ".lua"))
+			continue;
+
+		char *path = xstrdup_printf ("%s/%s", plugin_dir, iter->d_name);
+		lua_pushcfunction (g_ctx.L, app_lua_error_handler);
+		if (luaL_loadfile (g_ctx.L, path)
+		 || lua_pcall (g_ctx.L, 0, 0, -2))
+			exit_fatal ("Lua: %s", lua_tostring (g_ctx.L, -1));
+		lua_pop (g_ctx.L, 1);
+		free (path);
+	}
+	if (errno)
+		exit_fatal ("readdir: %s", strerror (errno));
+	closedir (dir);
+}
+
+static void
+app_lua_init (void)
+{
+	if (!(g_ctx.L = lua_newstate (app_lua_alloc, NULL)))
+		exit_fatal ("Lua initialization failed");
+
+	str_map_init (&g_ctx.coders);
+	g_ctx.coders.free = app_lua_coder_free;
+
+	lua_atpanic (g_ctx.L, app_lua_panic);
+	luaL_openlibs (g_ctx.L);
+	luaL_checkversion (g_ctx.L);
+
+	// I don't want to reimplement this and the C function is not exported
+	hard_assert (lua_getglobal (g_ctx.L, LUA_STRLIBNAME));
+	hard_assert (lua_getfield (g_ctx.L, -1, "format"));
+	g_ctx.ref_format = luaL_ref (g_ctx.L, LUA_REGISTRYINDEX);
+
+	luaL_newlib (g_ctx.L, app_lua_library);
+	lua_setglobal (g_ctx.L, PROGRAM_NAME);
+
+	luaL_newmetatable (g_ctx.L, XLUA_CHUNK_METATABLE);
+	luaL_setfuncs (g_ctx.L, app_lua_chunk_table, 0);
+	lua_pop (g_ctx.L, 1);
+
+	struct str_vector v;
+	str_vector_init (&v);
+	get_xdg_data_dirs (&v);
+	for (size_t i = 0; i < v.len; i++)
+	{
+		char *path = xstrdup_printf
+			("%s/%s", v.vector[i], PROGRAM_NAME "/plugins");
+		app_lua_load_plugins (path);
+		free (path);
+	}
+	str_vector_free (&v);
+}
+
+#endif // HAVE_LUA
+
 // --- Actions -----------------------------------------------------------------
 
 /// Checks what items are visible and returns if fixes were needed
@@ -1299,12 +1799,16 @@ main (int argc, char *argv[])
 
 		{ 'o', "offset", NULL, 0, "offset within the file" },
 		{ 's', "size", NULL, 0, "size limit (1G by default)" },
+#ifdef HAVE_LUA
+		{ 't', "type", NULL, 0, "force interpretation as the given type" },
+#endif // HAVE_LUA
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
 	struct opt_handler oh;
 	opt_handler_init (&oh, argc, argv, opts, "[FILE]", "Hex viewer.");
 	int64_t size_limit = 1 << 30;
+	const char *forced_type = NULL;
 
 	int c;
 	while ((c = opt_handler_get (&oh)) != -1)
@@ -1328,6 +1832,9 @@ main (int argc, char *argv[])
 		if (!decode_size (optarg, &size_limit))
 			exit_fatal ("invalid size limit specified");
 		break;
+	case 't':
+		forced_type = optarg;
+		break;
 	default:
 		print_error ("wrong options");
 		opt_handler_usage (&oh, stderr);
@@ -1336,6 +1843,21 @@ main (int argc, char *argv[])
 
 	argc -= optind;
 	argv += optind;
+
+#ifdef HAVE_LUA
+	// We do it at this questionable location to catch plugin failure before
+	// we read potentially hundreds of megabytes of data in
+	app_lua_init ();
+
+	if (forced_type && !strcmp (forced_type, "list"))
+	{
+		struct str_map_iter iter;
+		str_map_iter_init (&iter, &g_ctx.coders);
+		while (str_map_iter_next (&iter))
+			puts (iter.link->key);
+		exit (EXIT_SUCCESS);
+	}
+#endif // HAVE_LUA
 
 	// When no filename is given, read from stdin and replace it with the tty
 	int input_fd;
@@ -1399,6 +1921,26 @@ main (int argc, char *argv[])
 		print_warning ("failed to set the locale");
 
 	app_init_context ();
+#ifdef HAVE_LUA
+	// TODO: eventually we should do this in a separate thread after load
+	//   as it may take a long time (-> responsivity) and once we allow the user
+	//   to edit the file, each change will need a background rescan
+	lua_pushcfunction (g_ctx.L, app_lua_error_handler);
+	lua_pushcfunction (g_ctx.L, app_lua_chunk_decode);
+
+	struct app_lua_chunk *chunk = app_lua_chunk_new (g_ctx.L);
+	chunk->offset = g_ctx.data_offset;
+	chunk->len = g_ctx.data_len;
+
+	if (forced_type)
+		lua_pushstring (g_ctx.L, forced_type);
+	else
+		lua_pushnil (g_ctx.L);
+	if (lua_pcall (g_ctx.L, 2, 0, -4))
+		exit_fatal ("Lua: decoding failed: %s", lua_tostring (g_ctx.L, -1));
+
+	lua_pop (g_ctx.L, 1);
+#endif // HAVE_LUA
 	app_flatten_marks ();
 
 	app_load_configuration ();
@@ -1418,5 +1960,10 @@ main (int argc, char *argv[])
 	endwin ();
 	g_log_message_real = log_message_stdio;
 	app_free_context ();
+
+#ifdef HAVE_LUA
+	str_map_free (&g_ctx.coders);
+#endif // HAVE_LUA
+
 	return 0;
 }
