@@ -1368,7 +1368,7 @@ enum action
 	ACTION_SCROLL_DOWN, ACTION_GOTO_BOTTOM, ACTION_GOTO_PAGE_NEXT,
 
 	ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT,
-
+	ACTION_ROW_START, ACTION_ROW_END,
 	ACTION_FIELD_PREVIOUS, ACTION_FIELD_NEXT,
 
 	ACTION_COUNT
@@ -1441,6 +1441,29 @@ app_process_action (enum action action)
 		}
 		app_invalidate ();
 		break;
+
+	case ACTION_ROW_START:
+	{
+		int64_t new =  g_ctx.view_cursor / ROW_SIZE      * ROW_SIZE;
+		new = MAX (new, g_ctx.data_offset);
+		new = MIN (new, g_ctx.data_offset + g_ctx.data_len - 1);
+
+		g_ctx.view_cursor = new;
+		g_ctx.view_skip_nibble = false;
+		app_invalidate ();
+		break;
+	}
+	case ACTION_ROW_END:
+	{
+		int64_t new = (g_ctx.view_cursor / ROW_SIZE + 1) * ROW_SIZE - 1;
+		new = MAX (new, g_ctx.data_offset);
+		new = MIN (new, g_ctx.data_offset + g_ctx.data_len - 1);
+
+		g_ctx.view_cursor = new;
+		g_ctx.view_skip_nibble = false;
+		app_invalidate ();
+		break;
+	}
 
 	case ACTION_FIELD_PREVIOUS:
 	{
@@ -1543,8 +1566,8 @@ g_default_bindings[] =
 	{ "C-l",        ACTION_REDRAW,             {}},
 	{ "Tab",        ACTION_TOGGLE_ENDIANITY,   {}},
 
-	{ "Home",       ACTION_GOTO_TOP,           {}},
-	{ "End",        ACTION_GOTO_BOTTOM,        {}},
+	{ "Home",       ACTION_ROW_START,          {}},
+	{ "End",        ACTION_ROW_END,            {}},
 	{ "M-<",        ACTION_GOTO_TOP,           {}},
 	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
 	{ "g",          ACTION_GOTO_TOP,           {}},
