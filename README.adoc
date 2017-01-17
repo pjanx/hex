@@ -1,15 +1,13 @@
 hex
 ===
 
-'hex' is yet another hex viewer.  Right now there are no advantages to it as it
-has almost no features at all at this stage.
+'hex' is yet another hex viewer.  It automatically interprets fields within
+files using a set of Lua scripts, colorizing them and showing descriptions on
+the side.
+
+At the moment the project is still in a very early stage.
 
 image::hex.png[align="center"]
-
-Plans
------
-In the future, it should be able to automatically interpret fields within files
-using a set of Lua scripts, colorize them and show descriptions on the side.
 
 Packages
 --------
@@ -24,7 +22,7 @@ Building and Running
 --------------------
 Build dependencies: CMake, pkg-config, help2man, liberty (included),
                     termo (included) +
-Runtime dependencies: ncursesw, libunistring
+Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting)
 
  $ git clone --recursive https://github.com/pjanouch/hex.git
  $ mkdir hex/build
@@ -76,6 +74,10 @@ Contributing and Support
 Use this project's GitHub to report any bugs, request features, or submit pull
 requests.  If you want to discuss this project, or maybe just hang out with
 the developer, feel free to join me at irc://irc.janouch.name, channel #dev.
+
+Similar software
+----------------
+https://codisec.com/veles/ can also highlight files but it's not scriptable.
 
 License
 -------
