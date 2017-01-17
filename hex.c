@@ -378,9 +378,14 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 		}
 		else
 		{
+			int cell_attrs = attrs;
+			if (cell_addr >= g_ctx.view_cursor
+			 && cell_addr <  g_ctx.view_cursor + 8)
+				cell_attrs |= A_UNDERLINE;
+
 			uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
 			char *hex = xstrdup_printf ("%02x", cell);
-			row_buffer_append (buf, hex, attrs);
+			row_buffer_append (buf, hex, cell_attrs);
 			free (hex);
 
 			str_append_c (&ascii, (cell >= 32 && cell < 127) ? cell : '.');
