@@ -20,6 +20,82 @@ local detect = function (c)
 	return c:read (4) == "\x7FELF"
 end
 
+local ph_type_table = {
+	[0]   = "unused segment",
+	[1]   = "loadable segment",
+	[2]   = "dynamic linking information",
+	[3]   = "interpreter pathname",
+	[4]   = "auxiliary information",
+	[5]   = "reserved",
+	[6]   = "the program header table itself",
+	[7]   = "the thread-local storage template"
+}
+
+local xform_ph_flags = function (u32)
+	local info = {}
+	if u32 & 4 ~= 0 then table.insert (info, "read")    end
+	if u32 & 2 ~= 0 then table.insert (info, "write")   end
+	if u32 & 1 ~= 0 then table.insert (info, "execute") end
+
+	local junk = u32 & ~7
+	if junk ~= 0 then
+		table.insert (info, ("unknown: %#x"):format (junk))
+	end
+
+	if #info == 0 then return 0 end
+
+	local result = info[1]
+	for i = 2, #info do result = result .. ", " .. info[i] end
+	return result
+end
+
+local decode_ph = function (elf, c)
+	local ph = {}
+	ph.type = c:u32 ("type: %s", function (u32)
+		-- TODO: there are more known weird values and ranges
+		name = ph_type_table[u32]
+		if name then return name end
+		return "unknown: %#x", u32
+	end)
+	if elf.class == 2 then ph.flags = c:u32 ("flags: %s", xform_ph_flags) end
+	ph.offset = elf.uwide (c, "offset in file: %#x")
+	ph.vaddr = elf.uwide (c, "virtual address: %#x")
+	ph.paddr = elf.uwide (c, "physical address: %#x")
+	ph.filesz = elf.uwide (c, "size in file: %d")
+	ph.memsz = elf.uwide (c, "sise in memory: %d")
+	if elf.class == 1 then ph.flags = c:u32 ("flags: %s", xform_ph_flags) end
+	ph.align = elf.uwide (c, "alignment: %d")
+end
+
+local decode_sh = function (elf, c)
+	-- TODO
+end
+
+local abi_table = {
+	[0]   = "UNIX System V ABI",
+	[1]   = "HP-UX operating system",
+	[2]   = "NetBSD",
+	[3]   = "GNU/Linux",
+	[4]   = "GNU/Hurd",
+	[6]   = "Solaris",
+	[7]   = "AIX",
+	[8]   = "IRIX",
+	[9]   = "FreeBSD",
+	[10]  = "TRU64 UNIX",
+	[11]  = "Novell Modesto",
+	[12]  = "OpenBSD",
+	[13]  = "OpenVMS",
+	[14]  = "Hewlett-Packard Non-Stop Kernel",
+	[15]  = "AROS",
+	[16]  = "FenixOS",
+	[17]  = "Nuxi CloudABI",
+	[64]  = "Bare-metal TMS320C6000",
+	[64]  = "AMD HSA runtime",
+	[65]  = "Linux TMS320C6000",
+	[97]  = "ARM",
+	[255] = "Standalone (embedded) application"
+}
+
 local type_table = {
 	[0]   = "no file type",
 	[1]   = "relocatable file",
@@ -210,74 +286,20 @@ local machine_table = {
 	[247] = "Linux kernel bpf virtual machine"
 }
 
-local decode32 = function (c)
-	-- TODO: like the 64-bit version, maybe try to merge the code somehow
-end
-
-local decode64 = function (c)
-	local type = c:u16 ("type of file: %s", function (u16)
-		name = type_table[u16]
-		if name then return name end
-		return "unknown: %d", u16
-	end)
-	local machine = c:u16 ("required architecture: %s", function (u16)
-		name = machine_table[u16]
-		if name then return name end
-		return "unknown: %d", u16
-	end)
-	local version = c:u32 ("version: %d")
-	local entry = c:u64 ("program entry address: %#x")
-	local ph_offset = c:u64 ("program header table offset: %#x")
-	local sh_offset = c:u64 ("section header table offset: %#x")
-	local flags = c:u32 ("processor-specific flags: %#x")
-	local eh_size = c:u16 ("ELF header size: %d")
-	local ph_entry_size = c:u16 ("program header size: %d")
-	local ph_number = c:u16 ("program header count: %d")
-	local sh_entry_size = c:u16 ("section header size: %d")
-	local sh_number = c:u16 ("section header count: %d")
-	local sh_string_index = c:u16 ("section header index for strings: %d")
-
-	-- TODO: decode all sections as well, see man 5 elf,
-	--   /usr/include/elf.h and /usr/include/llvm/Support/ELF.h
-end
-
-local abi_table = {
-	[0]   = "UNIX System V ABI",
-	[1]   = "HP-UX operating system",
-	[2]   = "NetBSD",
-	[3]   = "GNU/Linux",
-	[4]   = "GNU/Hurd",
-	[6]   = "Solaris",
-	[7]   = "AIX",
-	[8]   = "IRIX",
-	[9]   = "FreeBSD",
-	[10]  = "TRU64 UNIX",
-	[11]  = "Novell Modesto",
-	[12]  = "OpenBSD",
-	[13]  = "OpenVMS",
-	[14]  = "Hewlett-Packard Non-Stop Kernel",
-	[15]  = "AROS",
-	[16]  = "FenixOS",
-	[17]  = "Nuxi CloudABI",
-	[64]  = "Bare-metal TMS320C6000",
-	[64]  = "AMD HSA runtime",
-	[65]  = "Linux TMS320C6000",
-	[97]  = "ARM",
-	[255] = "Standalone (embedded) application"
-}
-
 local decode = function (c)
+	assert (c.position == 1)
 	if not detect (c ()) then error ("not an ELF file") end
 
 	local p = c.position, c:read (4)
 	c (p, p + 3):mark ("ELF magic")
 
-	local class = c:u8 ("ELF class: %s", function (u8)
+	local elf = {}
+	elf.class = c:u8 ("ELF class: %s", function (u8)
 		if u8 == 1 then return "32-bit" end
 		if u8 == 2 then return "64-bit" end
 		return "invalid: %d", u8
 	end)
-	local data = c:u8 ("ELF data: %s", function (u8)
+	elf.data = c:u8 ("ELF data: %s", function (u8)
 		if u8 == 1 then
 			c.endianity = "le"
 			return "little-endian"
@@ -288,22 +310,65 @@ local decode = function (c)
 		end
 		return "invalid: %d", u8
 	end)
-	local version = c:u8 ("ELF version: %d")
-	local abi = c:u8 ("OS ABI: %s", function (u8)
+	elf.version = c:u8 ("ELF version: %d")
+	elf.abi = c:u8 ("OS ABI: %s", function (u8)
 		name = abi_table[u8]
 		if name then return name end
 		return "unknown: %d", u8
 	end)
-	local abi_version = c:u8 ("OS ABI version: %d")
+	elf.abi_version = c:u8 ("OS ABI version: %d")
 
 	-- The padding is reserved, no big sense in marking it
 	local padding = c:read (7)
 
-	-- We cannot decode anything further as we don't know how
-	if data ~= 1 and data ~= 2 then return end
+	-- We cannot decode anything further if we don't know endianity
+	if elf.data ~= 1 and elf.data ~= 2 then return end
 
-	if class == 1 then decode32 (c) end
-	if class == 2 then decode64 (c) end
+	-- And the same applies to the class
+	if     elf.class == 1 then elf.uwide = c.u32
+	elseif elf.class == 2 then elf.uwide = c.u64
+	else return end
+
+	elf.type = c:u16 ("type of file: %s", function (u16)
+		name = type_table[u16]
+		if name then return name end
+		return "unknown: %d", u16
+	end)
+	elf.machine = c:u16 ("required architecture: %s", function (u16)
+		name = machine_table[u16]
+		if name then return name end
+		return "unknown: %d", u16
+	end)
+	elf.version = c:u32 ("version: %d")
+	elf.entry = elf.uwide (c, "program entry address: %#x")
+	elf.ph_offset = elf.uwide (c, "program header table offset: %#x")
+	elf.sh_offset = elf.uwide (c, "section header table offset: %#x")
+	elf.flags = c:u32 ("processor-specific flags: %#x")
+	elf.eh_size = c:u16 ("ELF header size: %d")
+	c (1, elf.eh_size):mark ("ELF header")
+
+	elf.ph_entry_size = c:u16 ("program header size: %d")
+	elf.ph_number = c:u16 ("program header count: %d")
+	elf.sh_entry_size = c:u16 ("section header size: %d")
+	elf.sh_number = c:u16 ("section header count: %d")
+	elf.sh_string_index = c:u16 ("section header index for strings: %d")
+
+	-- TODO: decode all headers as well, see man 5 elf,
+	--   /usr/include/elf.h and /usr/include/llvm/Support/ELF.h
+	for i = 1, elf.ph_number do
+		local start = elf.ph_offset + (i - 1) * elf.ph_entry_size
+		local ph = c (1 + start, start + elf.ph_entry_size)
+		ph:mark ("ELF program header %d", i - 1)
+		decode_ph (elf, ph)
+	end
+
+	-- TODO: we will need to decode "sh_string_index" first to get names
+	for i = 1, elf.sh_number do
+		local start = elf.sh_offset + (i - 1) * elf.sh_entry_size
+		local sh = c (1 + start, start + elf.sh_entry_size)
+		sh:mark ("ELF section header %d", i - 1)
+		decode_sh (elf, sh)
+	end
 end
 
 hex.register { type="elf", detect=detect, decode=decode }
