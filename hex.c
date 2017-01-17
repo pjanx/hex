@@ -462,12 +462,12 @@ app_flatten_marks (void)
 			closest = MIN (closest, current[i]->offset + current[i]->len);
 
 		// Remove from "current" marks that have ended
-		for (size_t i = 0; i < current_len; i++)
-		{
+		for (size_t i = 0; i < current_len; )
 			if (closest == current[i]->offset + current[i]->len)
 				memmove (current + i, current + i + 1,
 					(--current_len - i) * sizeof *current);
-		}
+			else
+				i++;
 
 		// Add any new marks at "closest"
 		while (next < end && next->offset == closest)
