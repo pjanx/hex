@@ -1,0 +1,39 @@
+sudo: required
+dist: trusty
+language: c
+notifications:
+ irc:
+  channels: "irc.janouch.name#dev"
+  use_notice: true
+  skip_join: true
+env:
+ global:
+  - secure: "OLutMqHJ6PhhivSCPXntIWurxzJPByxDv0BEd9zOjEncIcIBf7AA86iLmJJ+y5VvytDX20qysHLkNFMSHMeNQ2ECTSQlJcpAEmftaGz2VKMsLKv1NAARkKicVb2lTJjnvcSTVQXXLVip8+yDGl9tBYNwWI5J3SuhzTpZ/uln9j/T7CmYuXOMfxz2Gr0OI0spgeeGK1BdiVxJ0qnU4A6mUxQ+Vq8p95tKsv8CD79xBiQtLrPva50FIG/uvEV+9pqnfCwxldtWw4AshsDPHddZrXXjg/NC9YzS4ltdr4TusZ6WAgECipoRw/G3WhtRxQS0rnhOdMUDz7SW6mtJJAIM8MUTSiwkG1FRQ3ALRPLi3dZkfIFKDlXh3jOYXnGTTgxgPdqo/VnLR/HKsstecRLTbsts2jOcirfF20Z2QEZ05/cdTFzjyv1nmdSwKyjBMmVMi6k9s3chbfO1CJtrix15rEFVIZxDs93e8c7hZ7b08Ha18gBYGrrJQxfmFhDoJT8H9B+fZaXFMHBe+xvD+H3MlZqjRfTlwJD86/zMv18j8EZU7BjdrmG7OPsbqIp/Ny0PsNKVVKlKrfQjQ1PjBIRKyWpyrzips66tQEgeZhJMiZf0NeJe57XOjHTunvYYWXkuYP2jU3KJsjzSybE0EYrlHIPleslcBOxgKA3A0dNvapM="
+ matrix:
+  - lua=ON
+  - lua=OFF
+addons:
+ coverity_scan:
+  project:
+   name: "pjanouch/hex"
+   description: "Hex viewer"
+  notification_email: p.janouch@gmail.com
+  build_command_prepend: "cmake .. -DCMAKE_BUILD_TYPE=Release"
+  build_command: "make"
+  branch_pattern: coverity_scan
+compiler:
+ - clang
+ - gcc
+before_install:
+ # We need this PPA for Lua 5.3
+ - sudo add-apt-repository ppa:vbernat/haproxy-1.6 -y
+ - sudo apt-get update -qq
+install:
+ - sudo apt-get install -y libncursesw5-dev libunistring-dev liblua5.3-dev help2man
+before_script:
+ - mkdir build
+ - cd build
+script:
+ - cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DWITH_LUA=$lua
+ - make all
+ - cpack -G DEB
