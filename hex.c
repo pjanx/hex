@@ -419,10 +419,10 @@ app_draw_view (void)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static uint64_t
-app_decode (const uint8_t *p, size_t len)
+app_decode (const uint8_t *p, size_t len, enum endianity endianity)
 {
 	uint64_t val = 0;
-	if (g_ctx.endianity == ENDIANITY_BE)
+	if (endianity == ENDIANITY_BE)
 		for (size_t i = 0; i < len; i++)
 			val = val << 8 | (uint64_t) p[i];
 	else
@@ -528,21 +528,21 @@ app_draw_footer (void)
 	}
 	if (len >= 2)
 	{
-		uint16_t val = app_decode (p, 2);
+		uint16_t val = app_decode (p, 2, g_ctx.endianity);
 		app_footer_field (&x, 'x', 2, "   %04x  ", val);
 		app_footer_field (&u, 'u', 2, " %6u  ", val);
 		app_footer_field (&s, 's', 2, " %6d  ", (int16_t) val);
 	}
 	if (len >= 4)
 	{
-		uint32_t val = app_decode (p, 4);
+		uint32_t val = app_decode (p, 4, g_ctx.endianity);
 		app_footer_field (&x, 'x', 4, "    %08x  ", val);
 		app_footer_field (&u, 'u', 4, " %11u  ", val);
 		app_footer_field (&s, 's', 4, " %11d  ", (int32_t) val);
 	}
 	if (len >= 8)
 	{
-		uint64_t val = app_decode (p, 8);
+		uint64_t val = app_decode (p, 8, g_ctx.endianity);
 		app_footer_field (&x, 'x', 8, "     %016" PRIx64, val);
 		app_footer_field (&u, 'u', 8, " %20" PRIu64, val);
 		app_footer_field (&s, 's', 8, " %20" PRId64, (int64_t) val);
