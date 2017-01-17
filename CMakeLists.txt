@@ -36,7 +36,7 @@ if (USE_SYSTEM_TERMO)
 	if (NOT Termo_FOUND)
 		message (FATAL_ERROR "System termo library not found")
 	endif (NOT Termo_FOUND)
-else (USE_SYSTEM_TERMO)
+else ()
 	add_subdirectory (termo EXCLUDE_FROM_ALL)
 	# We don't have many good choices when we don't want to install it and want
 	# to support older versions of CMake; this is a relatively clean approach
@@ -46,7 +46,7 @@ else (USE_SYSTEM_TERMO)
 	get_directory_property (Termo_INCLUDE_DIRS
 		DIRECTORY termo INCLUDE_DIRECTORIES)
 	set (Termo_LIBRARIES termo-static)
-endif (USE_SYSTEM_TERMO)
+endif ()
 
 include_directories (${UNISTRING_INCLUDE_DIRS}
 	${NCURSESW_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
@@ -76,7 +76,7 @@ install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 find_program (HELP2MAN_EXECUTABLE help2man)
 if (NOT HELP2MAN_EXECUTABLE)
 	message (FATAL_ERROR "help2man not found")
-endif (NOT HELP2MAN_EXECUTABLE)
+endif ()
 
 foreach (page ${PROJECT_NAME})
 	set (page_output "${PROJECT_BINARY_DIR}/${page}.1")
@@ -86,7 +86,7 @@ foreach (page ${PROJECT_NAME})
 			"${PROJECT_BINARY_DIR}/${page}" -o ${page_output}
 		DEPENDS ${page}
 		COMMENT "Generating man page for ${page}" VERBATIM)
-endforeach (page)
+endforeach ()
 
 add_custom_target (docs ALL DEPENDS ${project_MAN_PAGES})
 
@@ -94,7 +94,7 @@ foreach (page ${project_MAN_PAGES})
 	string (REGEX MATCH "\\.([0-9])$" manpage_suffix "${page}")
 	install (FILES "${page}"
 		DESTINATION "${CMAKE_INSTALL_MANDIR}/man${CMAKE_MATCH_1}")
-endforeach (page)
+endforeach ()
 
 # CPack
 set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Hex viewer")
