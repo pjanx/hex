@@ -5,6 +5,7 @@
 #define PROGRAM_VERSION "${project_VERSION}"
 
 #cmakedefine HAVE_RESIZETERM
+#cmakedefine HAVE_LUA
 
 #endif  // ! CONFIG_H
 

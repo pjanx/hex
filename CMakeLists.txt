@@ -48,6 +48,31 @@ else ()
 	set (Termo_LIBRARIES termo-static)
 endif ()
 
+set (project_libraries ${UNISTRING_LIBRARIES}
+	${NCURSESW_LIBRARIES} termo-static)
+
+pkg_search_module (lua lua53 lua5.3 lua-5.3 lua>=5.3)
+option (WITH_LUA "Enable support for Lua plugins" ${lua_FOUND})
+
+if (WITH_LUA)
+	if (NOT lua_FOUND)
+		message (FATAL_ERROR "Lua library not found")
+	endif ()
+
+	list (APPEND project_libraries ${lua_LIBRARIES})
+	include_directories (${lua_INCLUDE_DIRS})
+	link_directories (${lua_LIBRARY_DIRS})
+
+	include (CheckTypeSize)
+	set (CMAKE_REQUIRED_LIBRARIES ${lua_LIBRARIES})
+	set (CMAKE_REQUIRED_INCLUDES ${lua_INCLUDE_DIRS})
+	set (CMAKE_EXTRA_INCLUDE_FILES "lua.h")
+	CHECK_TYPE_SIZE (lua_Integer LUA_INTEGER)
+	if (NOT HAVE_LUA_INTEGER OR LUA_INTEGER LESS 8)
+		message (FATAL_ERROR "Lua must have at least 64-bit integers")
+	endif ()
+endif ()
+
 include_directories (${UNISTRING_INCLUDE_DIRS}
 	${NCURSESW_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
 
@@ -57,14 +82,15 @@ set (CMAKE_REQUIRED_LIBRARIES ${NCURSESW_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
 # Generate a configuration file
+set (HAVE_LUA "${WITH_LUA}")
+
 configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
 include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c)
-target_link_libraries (${PROJECT_NAME} ${UNISTRING_LIBRARIES}
-	${NCURSESW_LIBRARIES} termo-static)
+target_link_libraries (${PROJECT_NAME} ${project_libraries})
 add_threads (${PROJECT_NAME})
 
 # Installation
