@@ -23,18 +23,23 @@
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
 #define ATTRIBUTE_TABLE(XX)                                    \
-	XX( FOOTER,     "footer",     -1, -1, 0                  ) \
-	XX( FOOTER_HL,  "footer_hl",  -1, -1, A_BOLD             ) \
-	/* Bar                                                  */ \
-	XX( BAR,        "bar",        -1, -1, A_REVERSE          ) \
-	XX( BAR_HL,     "bar_hl",     -1, -1, A_REVERSE | A_BOLD ) \
-	/* View                                                 */ \
-	XX( EVEN,       "even",       -1, -1, 0                  ) \
-	XX( ODD,        "odd",        -1, -1, 0                  ) \
-	XX( SELECTION,  "selection",  -1, -1, A_REVERSE          ) \
-	/* These are for debugging only                         */ \
-	XX( WARNING,    "warning",     3, -1, 0                  ) \
-	XX( ERROR,      "error",       1, -1, 0                  )
+	XX( FOOTER,     "footer",     -1,  -1, 0                  ) \
+	XX( FOOTER_HL,  "footer_hl",  -1,  -1, A_BOLD             ) \
+	/* Bar                                                   */ \
+	XX( BAR,        "bar",        -1,  -1, A_REVERSE          ) \
+	XX( BAR_HL,     "bar_hl",     -1,  -1, A_REVERSE | A_BOLD ) \
+	/* View                                                  */ \
+	XX( EVEN,       "even",       -1,  -1, 0                  ) \
+	XX( ODD,        "odd",        -1,  -1, 0                  ) \
+	XX( SELECTION,  "selection",  -1,  -1, A_REVERSE          ) \
+	/* Field highlights                                      */ \
+	XX( C1,         "c1",         22, 194, 0                  ) \
+	XX( C2,         "c2",         88, 224, 0                  ) \
+	XX( C3,         "c3",         58, 229, 0                  ) \
+	XX( C4,         "c4",         20, 189, 0                  ) \
+	/* These are for debugging only                          */ \
+	XX( WARNING,    "warning",     3,  -1, 0                  ) \
+	XX( ERROR,      "error",       1,  -1, 0                  )
 
 enum
 {
@@ -88,6 +93,26 @@ update_curses_terminal_size (void)
 #endif  // HAVE_RESIZETERM && TIOCGWINSZ
 }
 
+// --- Simple array support ----------------------------------------------------
+
+// Primitives for arrays
+
+#define ARRAY(type, name) type *name; size_t name ## _len, name ## _size;
+#define ARRAY_INIT(a)                                                          \
+	BLOCK_START                                                                \
+		a = xcalloc (sizeof *a, (a ## _size = 16));                            \
+		a ## _len = 0;                                                         \
+	BLOCK_END
+#define ARRAY_RESERVE(a, n)                                                    \
+	array_reserve ((void **) &a, sizeof *a, a ## _len + n, &a ## _size)
+
+static void
+array_reserve (void **array, size_t element_size, size_t len, size_t *size)
+{
+	while (len > *size)
+		*array = xreallocarray (*array, element_size, *size <<= 1);
+}
+
 // --- Application -------------------------------------------------------------
 
 enum
@@ -99,6 +124,26 @@ enum endianity
 {
 	ENDIANITY_LE,                       ///< Little endian
 	ENDIANITY_BE                        ///< Big endian
+};
+
+struct mark
+{
+	int64_t offset;                     ///< Offset of the mark
+	int64_t len;                        ///< Length of the mark
+	size_t description;                 ///< Textual description string offset
+};
+
+// XXX: can we avoid constructing the marks_by_offset lookup array?
+//   How much memory is it even going to consume in reality?
+
+/// This is the final result suitable for display, including unmarked areas.
+/// We might infer `color` from the index of this entry but then unmarked areas
+/// would skip a color, which is undesired.
+struct marks_by_offset
+{
+	int64_t offset;                     ///< Offset in the file
+	struct mark **marks;                ///< Sentinelled array of mark pointers
+	int color;                          ///< Color of the area until next offset
 };
 
 static struct app_context
@@ -123,6 +168,13 @@ static struct app_context
 	uint8_t *data;                      ///< Target data
 	int64_t data_len;                   ///< Length of the data
 	int64_t data_offset;                ///< Offset of the data within the file
+
+	// Field marking:
+
+	ARRAY (struct mark, marks)          ///< Marks
+	struct str mark_strings;            ///< Storage for mark descriptions
+
+	ARRAY (struct marks_by_offset, marks_by_offset)
 
 	// View:
 
@@ -239,6 +291,10 @@ app_init_context (void)
 	poller_init (&g_ctx.poller);
 	config_init (&g_ctx.config);
 
+	ARRAY_INIT (g_ctx.marks);
+	str_init (&g_ctx.mark_strings);
+	ARRAY_INIT (g_ctx.marks_by_offset);
+
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
 	// Note that non-Unicode locales are handled pretty inefficiently.
@@ -268,6 +324,8 @@ app_init_terminal (void)
 		if (g_ctx.attrs[a].fg >= COLORS || g_ctx.attrs[a].fg < -1
 		 || g_ctx.attrs[a].bg >= COLORS || g_ctx.attrs[a].bg < -1)
 		{
+			// FIXME: we need a 256color default palette that fails gracefully
+			//   to something like underlined fields
 			app_init_attributes ();
 			return;
 		}
@@ -282,6 +340,13 @@ app_free_context (void)
 {
 	config_free (&g_ctx.config);
 	poller_free (&g_ctx.poller);
+
+	free (g_ctx.marks);
+	str_free (&g_ctx.mark_strings);
+
+	for (size_t i = 0; i < g_ctx.marks_by_offset_len; i++)
+		free (g_ctx.marks_by_offset[i].marks);
+	free (g_ctx.marks_by_offset);
 
 	free (g_ctx.message);
 
@@ -315,6 +380,106 @@ app_is_character_in_locale (ucs4_t ch)
 		return false;
 	free (tmp);
 	return true;
+}
+
+// --- Field marking -----------------------------------------------------------
+
+/// Find the "marks_by_offset" object covering the offset (if any)
+static ssize_t
+app_find_marks (int64_t offset)
+{
+	ssize_t min = 0, end = g_ctx.marks_by_offset_len;
+	while (min < end)
+	{
+		ssize_t mid = min + (end - min) / 2;
+		if (offset >= g_ctx.marks_by_offset[mid].offset)
+			min = mid + 1;
+		else
+			end = mid;
+	}
+	return min - 1;
+}
+
+static struct marks_by_offset *
+app_marks_at_offset (int64_t offset)
+{
+	ssize_t i = app_find_marks (offset);
+	if (i < 0 || (size_t) i >= g_ctx.marks_by_offset_len)
+		return NULL;
+
+	struct marks_by_offset *marks = &g_ctx.marks_by_offset[i];
+	if (marks->offset > offset)
+		return NULL;
+	return marks;
+}
+
+static int
+app_mark_cmp (const void *first, const void *second)
+{
+	const struct mark *a = first, *b = second;
+	// This ordering is pretty much arbitrary, seemed to make sense
+	if (a->offset < b->offset) return -1;
+	if (a->offset > b->offset) return  1;
+	if (a->len    < b->len)    return  1;
+	if (a->len    > b->len)    return -1;
+	return 0;
+}
+
+static void
+app_flatten_marks (void)
+{
+	qsort (g_ctx.marks, g_ctx.marks_len, sizeof *g_ctx.marks, app_mark_cmp);
+	if (!g_ctx.marks_len)
+		return;
+
+	ARRAY (struct mark *, current)
+	ARRAY_INIT (current);
+	int current_color = 0;
+
+	struct mark *next = g_ctx.marks;
+	struct mark *end = next + g_ctx.marks_len;
+	while (current_len || next < end)
+	{
+		// Find the closest offset at which marks change
+		int64_t closest = g_ctx.data_offset + g_ctx.data_len;
+		if (next < end)
+			closest = next->offset;
+		for (size_t i = 0; i < current_len; i++)
+			closest = MIN (closest, current[i]->offset + current[i]->len);
+
+		// Remove from "current" marks that have ended
+		for (size_t i = 0; i < current_len; i++)
+		{
+			if (closest == current[i]->offset + current[i]->len)
+				memmove (current + i, current + i + 1,
+					(--current_len - i) * sizeof *current);
+		}
+
+		// Add any new marks at "closest"
+		while (next < end && next->offset == closest)
+		{
+			ARRAY_RESERVE (current, 1);
+			current[current_len++] = next++;
+		}
+
+		// Save marks at that offset to be used by rendering
+		struct mark **marks = NULL;
+		int color = -1;
+
+		if (current_len)
+		{
+			marks = memcpy (xcalloc (sizeof *marks, current_len + 1),
+				current, sizeof *marks * current_len);
+
+			color = ATTRIBUTE_C1 + current_color++;
+			current_color %= 4;
+		}
+
+		ARRAY_RESERVE (g_ctx.marks_by_offset, 1);
+		g_ctx.marks_by_offset[g_ctx.marks_by_offset_len++] =
+			(struct marks_by_offset) { closest, marks, color };
+	}
+	free (current);
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -379,6 +544,10 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 		else
 		{
 			int cell_attrs = attrs;
+			struct marks_by_offset *marks = app_marks_at_offset (cell_addr);
+			if (marks && marks->color >= 0)
+				cell_attrs = g_ctx.attrs[marks->color].attrs;
+
 			if (cell_addr >= g_ctx.view_cursor
 			 && cell_addr <  g_ctx.view_cursor + 8)
 				cell_attrs |= A_UNDERLINE;
@@ -413,6 +582,33 @@ app_draw_view (void)
 		row_buffer_init (&buf);
 		app_make_row (&buf, addr, attrs);
 		app_flush_buffer (&buf, COLS, attrs);
+	}
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+static void
+app_draw_info (void)
+{
+	const struct marks_by_offset *marks;
+	if (!(marks = app_marks_at_offset (g_ctx.view_cursor)))
+		return;
+
+	int x_offset = 70;
+	struct mark **iter = marks->marks;
+	for (int y = 0; y < app_visible_rows (); y++)
+	{
+		struct mark *mark;
+		if (!iter || !(mark = *iter++))
+			break;
+
+		struct row_buffer buf;
+		row_buffer_init (&buf);
+		row_buffer_append (&buf,
+			g_ctx.mark_strings.str + mark->description, 0);
+
+		move (y, x_offset);
+		app_flush_buffer (&buf, COLS - x_offset, 0);
 	}
 }
 
@@ -564,6 +760,7 @@ app_on_refresh (void *user_data)
 
 	erase ();
 	app_draw_view ();
+	app_draw_info ();
 	app_draw_footer ();
 
 	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
@@ -1060,6 +1257,8 @@ app_init_poller_events (void)
 	g_ctx.refresh_event.dispatcher = app_on_refresh;
 }
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 /// Decode size arguments according to similar rules to those that dd(1) uses;
 /// we support octal and hexadecimal numbers but they clash with suffixes
 static bool
@@ -1200,6 +1399,8 @@ main (int argc, char *argv[])
 		print_warning ("failed to set the locale");
 
 	app_init_context ();
+	app_flatten_marks ();
+
 	app_load_configuration ();
 	app_init_terminal ();
 	signals_setup_handlers ();
