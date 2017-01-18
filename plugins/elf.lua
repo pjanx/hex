@@ -16,6 +16,8 @@
 -- CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 --
 
+-- See man 5 elf, /usr/include/elf.h and /usr/include/llvm/Support/ELF.h
+
 local detect = function (c)
 	return c:read (4) == "\x7FELF"
 end
@@ -33,11 +35,11 @@ local ph_type_table = {
 
 local xform_ph_flags = function (u32)
 	local info = {}
-	if u32 & 4 ~= 0 then table.insert (info, "read")    end
-	if u32 & 2 ~= 0 then table.insert (info, "write")   end
-	if u32 & 1 ~= 0 then table.insert (info, "execute") end
+	if u32 & 0x4 ~= 0 then table.insert (info, "read")    end
+	if u32 & 0x2 ~= 0 then table.insert (info, "write")   end
+	if u32 & 0x1 ~= 0 then table.insert (info, "execute") end
 
-	local junk = u32 & ~7
+	local junk = u32 & ~0x7
 	if junk ~= 0 then
 		table.insert (info, ("unknown: %#x"):format (junk))
 	end
@@ -65,10 +67,67 @@ local decode_ph = function (elf, c)
 	ph.memsz = elf.uwide (c, "sise in memory: %d")
 	if elf.class == 1 then ph.flags = c:u32 ("flags: %s", xform_ph_flags) end
 	ph.align = elf.uwide (c, "alignment: %d")
+	return ph
+end
+
+local sh_type_table = {
+	[0]   = "null entry",
+	[1]   = "program-defined contents",
+	[2]   = "symbol table",
+	[3]   = "string table",
+	[4]   = "relocation entries",
+	[5]   = "symbol hash table",
+	[6]   = "dynamic linking information",
+	[7]   = "information about the file",
+	[8]   = "data occupies no space in file",
+	[9]   = "relocation entries",
+	[10]  = "reserved",
+	[11]  = "symbol table",
+	[14]  = "pointers to initialization functions",
+	[15]  = "pointers to terminnation functions",
+	[16]  = "pointers to pre-init functions",
+	[17]  = "section group",
+	[18]  = "indices for SHN_XINDEX entries"
+}
+
+local xform_sh_flags = function (u)
+	-- TODO: there are more known weird values and ranges
+	local info = {}
+	if u & 0x1 ~= 0 then table.insert (info, "write") end
+	if u & 0x2 ~= 0 then table.insert (info, "alloc") end
+	if u & 0x4 ~= 0 then table.insert (info, "execinstr") end
+
+	local junk = u & ~0x7
+	if junk ~= 0 then
+		table.insert (info, ("unknown: %#x"):format (junk))
+	end
+
+	if #info == 0 then return 0 end
+
+	local result = info[1]
+	for i = 2, #info do result = result .. ", " .. info[i] end
+	return result
 end
 
 local decode_sh = function (elf, c)
-	-- TODO
+	local sh = {}
+	-- TODO: decode the values, give the fields meaning
+	sh.name = c:u32 ("name index: %d")
+	sh.type = c:u32 ("type: %s", function (u32)
+		-- TODO: there are more known weird values and ranges
+		name = sh_type_table[u32]
+		if name then return name end
+		return "unknown: %#x", u32
+	end)
+	sh.flags = elf.uwide (c, "flags: %s", xform_sh_flags)
+	sh.addr = elf.uwide (c, "load address: %#x")
+	sh.offset = elf.uwide (c, "offset in file: %#x")
+	sh.size = elf.uwide (c, "size: %d")
+	sh.link = c:u32 ("header table index link: %d")
+	sh.info = c:u32 ("extra information: %d")
+	sh.addralign = elf.uwide (c, "address alignment: %d")
+	sh.entsize = elf.uwide (c, "size of records: %d")
+	return sh
 end
 
 local abi_table = {
@@ -353,21 +412,36 @@ local decode = function (c)
 	elf.sh_number = c:u16 ("section header count: %d")
 	elf.sh_string_index = c:u16 ("section header index for strings: %d")
 
-	-- TODO: decode all headers as well, see man 5 elf,
-	--   /usr/include/elf.h and /usr/include/llvm/Support/ELF.h
 	for i = 1, elf.ph_number do
 		local start = elf.ph_offset + (i - 1) * elf.ph_entry_size
-		local ph = c (1 + start, start + elf.ph_entry_size)
-		ph:mark ("ELF program header %d", i - 1)
-		decode_ph (elf, ph)
+		local pchunk = c (1 + start, start + elf.ph_entry_size)
+		pchunk:mark ("ELF program header %d", i - 1)
+		decode_ph (elf, pchunk)
 	end
 
-	-- TODO: we will need to decode "sh_string_index" first to get names
+	-- Only mark section headers after we've decoded them all,
+	-- so that we can name them using the section containing section names
+	local shs = {}
 	for i = 1, elf.sh_number do
 		local start = elf.sh_offset + (i - 1) * elf.sh_entry_size
-		local sh = c (1 + start, start + elf.sh_entry_size)
-		sh:mark ("ELF section header %d", i - 1)
-		decode_sh (elf, sh)
+		local schunk = c (1 + start, start + elf.sh_entry_size)
+		sh = decode_sh (elf, schunk)
+		shs[i], shs[sh] = sh, schunk
+	end
+
+	local strings
+	if elf.sh_string_index ~= 0 and elf.sh_string_index < elf.sh_number then
+		local sh = shs[elf.sh_string_index + 1]
+		strings = c (sh.offset + 1, sh.offset + sh.size)
+	end
+	for i, sh in ipairs (shs) do
+		local schunk = shs[sh]
+		if strings and sh.name < #strings then
+			sh.name_string = strings (sh.name + 1):cstring ()
+			schunk:mark ("ELF section header %d (%s)", i - 1, sh.name_string)
+		else
+			schunk:mark ("ELF section header %d", i - 1)
+		end
 	end
 end
 
