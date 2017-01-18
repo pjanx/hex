@@ -911,7 +911,7 @@ app_lua_chunk_len (lua_State *L)
 {
 	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
 	lua_pushinteger (L, self->len);
-	return 0;
+	return 1;
 }
 
 /// Create a new subchunk following Lua's string.sub() semantics.
