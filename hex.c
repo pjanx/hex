@@ -398,7 +398,7 @@ app_is_character_in_locale (ucs4_t ch)
 
 // --- Field marking -----------------------------------------------------------
 
-/// Find the "marks_by_offset" object covering the offset (if any)
+/// Find the "marks_by_offset" span covering the offset (if any)
 static ssize_t
 app_find_marks (int64_t offset)
 {
@@ -439,6 +439,15 @@ app_mark_cmp (const void *first, const void *second)
 	return 0;
 }
 
+/// Flattens marks into sequential non-overlapping spans suitable for search
+/// by offset, assigning different colors to them in the process:
+/// @code
+///  ________    _______     ___
+/// |________|__|_______|   |___|
+///     |_________|
+///  ___ ____ __ _ _____ ___ ___
+/// |___|____|__|_|_____|___|___|
+/// @endcode
 static void
 app_flatten_marks (void)
 {
@@ -612,6 +621,8 @@ app_draw_info (void)
 	struct mark **iter = marks->marks;
 	for (int y = 0; y < app_visible_rows (); y++)
 	{
+		// TODO: we can use the field background
+		// TODO: we can keep going through subsequent fields to fill the column
 		struct mark *mark;
 		if (!iter || !(mark = *iter++))
 			break;
@@ -1517,6 +1528,10 @@ app_process_left_mouse_click (int line, int column)
 	}
 	else if (line < app_visible_rows ())
 	{
+		// TODO: when holding a mouse button over a mark string,
+		//   go to a locked mode that highlights that entire mark
+		//   (probably by inverting colors)
+
 		// TODO: employ strict checking here before the autofix
 		int offset;
 		if (column >= 10 && column < 50)
