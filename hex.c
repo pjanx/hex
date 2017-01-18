@@ -1937,13 +1937,13 @@ main (int argc, char *argv[])
 		if ((input_fd = dup (STDIN_FILENO)) < 0)
 			exit_fatal ("cannot read input: %s", strerror (errno));
 		close (STDIN_FILENO);
-		if (open ("/dev/tty", O_RDWR))
+		if (open ("/dev/tty", O_RDWR) != STDIN_FILENO)
 			exit_fatal ("cannot open the terminal: %s", strerror (errno));
 	}
 	else if (argc == 1)
 	{
 		g_ctx.filename = xstrdup (argv[0]);
-		if (!(input_fd = open (argv[0], O_RDONLY)))
+		if ((input_fd = open (argv[0], O_RDONLY)) < 0)
 			exit_fatal ("cannot open `%s': %s", argv[0], strerror (errno));
 	}
 	else
