@@ -1871,7 +1871,7 @@ main (int argc, char *argv[])
 		{ 'o', "offset", NULL, 0, "offset within the file" },
 		{ 's', "size", NULL, 0, "size limit (1G by default)" },
 #ifdef HAVE_LUA
-		{ 't', "type", NULL, 0, "force interpretation as the given type" },
+		{ 't', "type", "TYPE", 0, "force interpretation as the given type" },
 #endif // HAVE_LUA
 		{ 0, NULL, NULL, 0, NULL }
 	};
