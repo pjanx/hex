@@ -18,14 +18,13 @@ set (project_VERSION "${project_VERSION}.${project_VERSION_MINOR}")
 set (project_VERSION "${project_VERSION}.${project_VERSION_PATCH}")
 
 # For custom modules
-set (CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+set (CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/liberty/cmake)
 
 # Dependencies
 find_package (Ncursesw REQUIRED)
 find_package (PkgConfig REQUIRED)
 find_package (Unistring REQUIRED)
 
-set (CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/liberty/cmake)
 include (AddThreads)
 
 find_package (Termo QUIET NO_MODULE)

@@ -58,6 +58,7 @@ enum
 #define LIBERTY_WANT_ASYNC
 #define LIBERTY_WANT_PROTO_HTTP
 #include "liberty/liberty.c"
+#include "liberty/liberty-tui.c"
 
 #include <locale.h>
 #include <termios.h>
@@ -65,7 +66,6 @@ enum
 #include <sys/ioctl.h>
 #endif  // ! TIOCGWINSZ
 
-#include "tui.c"
 #include "termo.h"
 
 #ifdef HAVE_LUA
@@ -100,23 +100,6 @@ update_curses_terminal_size (void)
 	refresh ();
 #endif  // HAVE_RESIZETERM && TIOCGWINSZ
 }
-
-// --- Simple array support ----------------------------------------------------
-
-// The most basic helper macros to make working with arrays not suck
-
-#define ARRAY(type, name) type *name; size_t name ## _len, name ## _size;
-#define ARRAY_INIT_SIZED(a, n)                                                 \
-	BLOCK_START                                                                \
-		(a) = xcalloc (sizeof *(a), (a ## _size) = (n));                       \
-		(a ## _len) = 0;                                                       \
-	BLOCK_END
-#define ARRAY_INIT(a) ARRAY_INIT_SIZED (a, 16)
-#define ARRAY_RESERVE(a, n)                                                    \
-	BLOCK_START                                                                \
-		while ((a ## _size) - (a ## _len) < n)                                 \
-			(a) = xreallocarray ((a), sizeof *(a), (a ## _size) <<= 1);        \
-	BLOCK_END
 
 // --- Application -------------------------------------------------------------
 
@@ -1277,8 +1260,8 @@ app_lua_init (void)
 	luaL_setfuncs (g_ctx.L, app_lua_chunk_table, 0);
 	lua_pop (g_ctx.L, 1);
 
-	struct str_vector v;
-	str_vector_init (&v);
+	struct strv v;
+	strv_init (&v);
 	get_xdg_data_dirs (&v);
 	for (size_t i = 0; i < v.len; i++)
 	{
@@ -1287,7 +1270,7 @@ app_lua_init (void)
 		app_lua_load_plugins (path);
 		free (path);
 	}
-	str_vector_free (&v);
+	strv_free (&v);
 }
 
 #endif // HAVE_LUA
@@ -1971,7 +1954,7 @@ main (int argc, char *argv[])
 
 	while (buf.len < (size_t) size_limit)
 	{
-		str_ensure_space (&buf, 8192);
+		str_reserve (&buf, 8192);
 		ssize_t n_read = read (input_fd, buf.str + buf.len,
 			MIN (size_limit - buf.len, buf.alloc - buf.len));
 		if (!n_read)
