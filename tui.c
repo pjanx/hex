@@ -191,7 +191,7 @@ row_buffer_ellipsis (struct row_buffer *self, int target)
 
 	// We use attributes from the last character we've removed,
 	// assuming that we don't shrink the array (and there's no real need)
-	ucs4_t ellipsis = L'…';
+	ucs4_t ellipsis = 0x2026; // …
 	if (app_is_character_in_locale (ellipsis))
 	{
 		if (self->total_width >= target)
