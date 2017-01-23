@@ -544,9 +544,9 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 	row_buffer_append (buf, row_addr_str, attrs);
 	free (row_addr_str);
 
-	struct str ascii;
-	str_init (&ascii);
-	str_append (&ascii, "  ");
+	struct row_buffer ascii;
+	row_buffer_init (&ascii);
+	row_buffer_append (&ascii, "  ", attrs);
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	for (int x = 0; x < ROW_SIZE; x++)
@@ -559,29 +559,32 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 		 || cell_addr >= end_addr)
 		{
 			row_buffer_append (buf, "  ", attrs);
-			str_append_c (&ascii, ' ');
+			row_buffer_append (&ascii, " ", attrs);
 		}
 		else
 		{
-			int cell_attrs = attrs;
+			int attrs_mark = attrs;
 			struct marks_by_offset *marks = app_marks_at_offset (cell_addr);
 			if (marks && marks->color >= 0)
-				cell_attrs = g_ctx.attrs[marks->color].attrs;
+				attrs_mark = g_ctx.attrs[marks->color].attrs;
 
+			int highlight = 0;
 			if (cell_addr >= g_ctx.view_cursor
 			 && cell_addr <  g_ctx.view_cursor + 8)
-				cell_attrs |= A_UNDERLINE;
+				highlight = A_UNDERLINE;
 
+			// TODO: leave it up to the user to decide what should be colored
 			uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
 			char *hex = xstrdup_printf ("%02x", cell);
-			row_buffer_append (buf, hex, cell_attrs);
+			row_buffer_append (buf, hex, attrs | highlight);
 			free (hex);
 
-			str_append_c (&ascii, (cell >= 32 && cell < 127) ? cell : '.');
+			char s[2] = { (cell >= 32 && cell < 127) ? cell : '.', 0 };
+			row_buffer_append (&ascii, s, attrs_mark | highlight);
 		}
 	}
-	row_buffer_append (buf, ascii.str, attrs);
-	str_free (&ascii);
+	row_buffer_append_buffer (buf, &ascii);
+	row_buffer_free (&ascii);
 }
 
 static void

@@ -154,6 +154,20 @@ row_buffer_append_args (struct row_buffer *self, const char *s, ...)
 	va_end (ap);
 }
 
+static void
+row_buffer_append_buffer (struct row_buffer *self, const struct row_buffer *rb)
+{
+	while (self->chars_alloc - self->chars_len < rb->chars_len)
+		self->chars = xreallocarray (self->chars,
+			sizeof *self->chars, (self->chars_alloc <<= 1));
+
+	memcpy (self->chars + self->chars_len, rb->chars,
+		rb->chars_len * sizeof *rb->chars);
+
+	self->chars_len   += rb->chars_len;
+	self->total_width += rb->total_width;
+}
+
 /// Pop as many codepoints as needed to free up "space" character cells.
 /// Given the suffix nature of combining marks, this should work pretty fine.
 static int
