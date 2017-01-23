@@ -103,23 +103,20 @@ update_curses_terminal_size (void)
 
 // --- Simple array support ----------------------------------------------------
 
-// Primitives for arrays
+// The most basic helper macros to make working with arrays not suck
 
 #define ARRAY(type, name) type *name; size_t name ## _len, name ## _size;
-#define ARRAY_INIT(a)                                                          \
+#define ARRAY_INIT_SIZED(a, n)                                                 \
 	BLOCK_START                                                                \
-		a = xcalloc (sizeof *a, (a ## _size = 16));                            \
-		a ## _len = 0;                                                         \
+		(a) = xcalloc (sizeof *(a), (a ## _size) = (n));                       \
+		(a ## _len) = 0;                                                       \
 	BLOCK_END
+#define ARRAY_INIT(a) ARRAY_INIT_SIZED (a, 16)
 #define ARRAY_RESERVE(a, n)                                                    \
-	array_reserve ((void **) &a, sizeof *a, a ## _len + n, &a ## _size)
-
-static void
-array_reserve (void **array, size_t element_size, size_t len, size_t *size)
-{
-	while (len > *size)
-		*array = xreallocarray (*array, element_size, *size <<= 1);
-}
+	BLOCK_START                                                                \
+		while ((a ## _size) - (a ## _len) < n)                                 \
+			(a) = xreallocarray ((a), sizeof *(a), (a ## _size) <<= 1);        \
+	BLOCK_END
 
 // --- Application -------------------------------------------------------------
 

@@ -90,6 +90,7 @@ struct row_char
 
 struct row_buffer
 {
+	// TODO: rewrite this using ARRAY
 	struct row_char *chars;             ///< Characters
 	size_t chars_len;                   ///< Character count
 	size_t chars_alloc;                 ///< Characters allocated
