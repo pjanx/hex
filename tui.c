@@ -137,11 +137,11 @@ row_buffer_append (struct row_buffer *self, const char *str, chtype attrs)
 }
 
 static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
+row_buffer_append_args (struct row_buffer *self, const char *s, ...)
 	ATTRIBUTE_SENTINEL;
 
 static void
-row_buffer_addv (struct row_buffer *self, const char *s, ...)
+row_buffer_append_args (struct row_buffer *self, const char *s, ...)
 {
 	va_list ap;
 	va_start (ap, s);
