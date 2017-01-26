@@ -25,7 +25,7 @@ end
 local function one_value (c, level)
 	local p, type = c.position, c:read (1)
 	if type == "e" then
-		c (p, c.position -1):mark ("%d: container end", level - 1)
+		c (p, c.position - 1):mark ("%d: container end", level - 1)
 		return false
 	elseif type == "i" then
 		local n = ""
