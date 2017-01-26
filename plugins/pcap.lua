@@ -182,6 +182,41 @@ end
 
 hex.register { type="pcap", detect=detect, decode=decode }
 
+local block_types = {
+	[0x0a0d0d0a] = "Section Header Block",
+	[0x00000001] = "Interface Description Block",
+	[0x00000003] = "Simple Packet Block",
+	[0x00000004] = "Name Resolution Block",
+	[0x00000005] = "Interface Statistics Block",
+	[0x00000006] = "Enhanced Packet Block",
+
+	[0x00000BAD] = "Custom Block",
+	[0x40000BAD] = "Custom Block"
+}
+
+local decode_shb = function (c)
+	local magic = c:u32 ()
+	local p, vmajor, vminor = c.position, c:u16 (), c:u16 ()
+	c (p, c.position - 1):mark ("PCAPNG version: %d.%d", vmajor, vminor)
+	-- XXX: what exactly does section_len mean?
+	local section_len = c:u64 ("section length: %d")
+
+	while not c.eof do
+		-- TODO: decode the meaning of options as well
+		local type = c:u16 ("option type: %d")
+		local length = c:u16 ("option length: %d")
+
+		local p = c.position
+		c.position = c.position + length + (-length & 3)
+		c (p, c.position - 1):mark ("option value")
+	end
+end
+
+local block_decoders = {
+	-- TODO: also decode other types of blocks
+	[0x0a0d0d0a] = decode_shb
+}
+
 -- As described by https://github.com/pcapng/pcapng
 local decode_ng = function (c)
 	assert (c.position == 1)
@@ -195,51 +230,19 @@ local decode_ng = function (c)
 		return "big-endian"
 	end)
 
-	local function decode_block_type (u32)
-		if u32 == 0x0a0d0d0a then return "Section Header Block" end
-		if u32 == 0x00000001 then return "Interface Description Block" end
-		if u32 == 0x00000003 then return "Simple Packet Block" end
-		if u32 == 0x00000004 then return "Name Resolution Block" end
-		if u32 == 0x00000005 then return "Interface Statistics Block" end
-		if u32 == 0x00000006 then return "Enhanced Packet Block" end
-
-		if u32 == 0x00000BAD or u32 == 0x40000BAD then
-			return "Custom Block"
-		end
-		return "unknown: %d", u32
-	end
-
-	local function decode_shb (c)
-		local magic = c:u32 ()
-		local p, vmajor, vminor = c.position, c:u16 (), c:u16 ()
-		c (p, c.position - 1):mark ("PCAPNG version: %d.%d", vmajor, vminor)
-		-- XXX: what exactly does section_len mean?
-		local section_len = c:u64 ("section length: %d")
-
-		while not c.eof do
-			-- TODO: decode the meaning of options as well
-			local type = c:u16 ("option type: %d")
-			local length = c:u16 ("option length: %d")
-
-			local p = c.position
-			c.position = c.position + length + (-length & 3)
-			c (p, c.position - 1):mark ("option value")
-		end
-	end
-
 	while not c.eof do
 		local block_start = c.position
-		local block_type = c:u32 ("PCAPNG block type: %s", decode_block_type)
+		local block_type = c:u32 ("PCAPNG block type: %s", function (u32)
+			local name = block_types[u32]
+			if name then return name end
+			return "unknown: %d", u32
+		end)
 		local block_len = c:u32 ("PCAPNG block length: %d")
-
 		local data_start = c.position
 		c.position = block_start + block_len - 4
-
-		local data = c (data_start, c.position - 1)
-		-- TODO: also decode other types of blocks
-		if block_type == 0x0a0d0d0a then decode_shb (data) end
-
-		local shb_len_end = c:u32 ("PCAPNG trailing block length: %d")
+		local decoder = block_decoders[block_type]
+		if decoder then decoder (c (data_start, c.position - 1)) end
+		c:u32 ("PCAPNG trailing block length: %d")
 	end
 end
 
