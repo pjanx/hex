@@ -17,8 +17,14 @@
 --
 
 local detect = function (c)
-	local magic = c:read (4)
-	return magic == "\xa1\xb2\xc3\xd4" or magic == "\xd4\xc3\xb2\xa1"
+	local magic = c:u32 ()
+	return magic == 0xa1b2c3d4 or magic == 0xd4c3b2a1
+end
+
+local detect_ng = function (c)
+	local magic = c (9):u32 ()
+	return c:u32 () == 0x0a0d0d0a
+		and (magic == 0x1a2b3c4d or magic == 0x4d3c2b1a)
 end
 
 -- Specified in http://www.tcpdump.org/linktypes.html
@@ -176,3 +182,65 @@ end
 
 hex.register { type="pcap", detect=detect, decode=decode }
 
+-- As described by https://github.com/pcapng/pcapng
+local decode_ng = function (c)
+	assert (c.position == 1)
+	if not detect_ng (c ()) then error ("not a PCAPNG file") end
+
+	c.endianity = "le"
+	c (9):u32 ("byte-order magic: %s", function (u32)
+		if u32 == 0x1a2b3c4d then return "little-endian" end
+
+		c.endianity = "be"
+		return "big-endian"
+	end)
+
+	local function decode_block_type (u32)
+		if u32 == 0x0a0d0d0a then return "Section Header Block" end
+		if u32 == 0x00000001 then return "Interface Description Block" end
+		if u32 == 0x00000003 then return "Simple Packet Block" end
+		if u32 == 0x00000004 then return "Name Resolution Block" end
+		if u32 == 0x00000005 then return "Interface Statistics Block" end
+		if u32 == 0x00000006 then return "Enhanced Packet Block" end
+
+		if u32 == 0x00000BAD or u32 == 0x40000BAD then
+			return "Custom Block"
+		end
+		return "unknown: %d", u32
+	end
+
+	local function decode_shb (c)
+		local magic = c:u32 ()
+		local p, vmajor, vminor = c.position, c:u16 (), c:u16 ()
+		c (p, c.position - 1):mark ("PCAPNG version: %d.%d", vmajor, vminor)
+		-- XXX: what exactly does section_len mean?
+		local section_len = c:u64 ("section length: %d")
+
+		while not c.eof do
+			-- TODO: decode the meaning of options as well
+			local type = c:u16 ("option type: %d")
+			local length = c:u16 ("option length: %d")
+
+			local p = c.position
+			c.position = c.position + length + (-length & 3)
+			c (p, c.position - 1):mark ("option value")
+		end
+	end
+
+	while not c.eof do
+		local block_start = c.position
+		local block_type = c:u32 ("PCAPNG block type: %s", decode_block_type)
+		local block_len = c:u32 ("PCAPNG block length: %d")
+
+		local data_start = c.position
+		c.position = block_start + block_len - 4
+
+		local data = c (data_start, c.position - 1)
+		-- TODO: also decode other types of blocks
+		if block_type == 0x0a0d0d0a then decode_shb (data) end
+
+		local shb_len_end = c:u32 ("PCAPNG trailing block length: %d")
+	end
+end
+
+hex.register { type="pcapng", detect=detect_ng, decode=decode_ng }
