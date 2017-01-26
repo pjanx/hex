@@ -988,6 +988,10 @@ app_lua_chunk_newindex (lua_State *L)
 static void
 app_lua_mark (int64_t offset, int64_t len, const char *desc)
 {
+	// That would cause stupid entries, making trouble in marks_by_offset
+	if (len <= 0)
+		return;
+
 	ARRAY_RESERVE (g_ctx.marks, 1);
 	g_ctx.marks[g_ctx.marks_len++] =
 		(struct mark) { offset, len, g_ctx.mark_strings.len };
