@@ -1099,7 +1099,10 @@ app_lua_chunk_finish_read
 {
 	int n_args = lua_gettop (L) - 1;
 	if (n_args < 2)
+	{
+		self->position += len;
 		return;
+	}
 
 	// Prepare <string.format>, <format>, <value>
 	lua_rawgeti (L, LUA_REGISTRYINDEX, g_ctx.ref_format);
