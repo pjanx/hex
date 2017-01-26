@@ -975,9 +975,9 @@ app_lua_chunk_newindex (lua_State *L)
 	}
 	else if (!strcmp (key, "position"))
 	{
-		lua_Integer position = luaL_checkinteger (L, 3) - 1;
+		lua_Integer position = luaL_checkinteger (L, 3);
 		if (position < 1 || position > self->len + 1)
-			return luaL_error (L, "position out of range: %" PRId64, position);
+			return luaL_error (L, "position out of range: %I", position);
 		self->position = position - 1;
 	}
 	else
