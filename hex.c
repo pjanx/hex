@@ -1037,6 +1037,9 @@ app_lua_chunk_identify (lua_State *L)
 	struct app_lua_coder *coder;
 	while ((coder = str_map_iter_next (&iter)))
 	{
+		if (coder->ref_detect == LUA_REFNIL)
+			continue;
+
 		lua_rawgeti (L, LUA_REGISTRYINDEX, coder->ref_detect);
 
 		// Clone the chunk first to reset its read position
