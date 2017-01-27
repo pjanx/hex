@@ -130,7 +130,7 @@ struct mark
 struct marks_by_offset
 {
 	int64_t offset;                     ///< Offset in the file
-	struct mark **marks;                ///< Sentinelled array of mark pointers
+	size_t marks;                       ///< Offset into "offset_entries"
 	int color;                          ///< Color of the area until next offset
 };
 
@@ -169,6 +169,7 @@ static struct app_context
 	struct str mark_strings;            ///< Storage for mark descriptions
 
 	ARRAY (struct marks_by_offset, marks_by_offset)
+	ARRAY (struct mark *, offset_entries)
 
 	// View:
 
@@ -288,6 +289,7 @@ app_init_context (void)
 	ARRAY_INIT (g_ctx.marks);
 	str_init (&g_ctx.mark_strings);
 	ARRAY_INIT (g_ctx.marks_by_offset);
+	ARRAY_INIT (g_ctx.offset_entries);
 
 	// This is also approximately what libunistring does internally,
 	// since the locale name is canonicalized by locale_charset().
@@ -337,10 +339,8 @@ app_free_context (void)
 
 	free (g_ctx.marks);
 	str_free (&g_ctx.mark_strings);
-
-	for (size_t i = 0; i < g_ctx.marks_by_offset_len; i++)
-		free (g_ctx.marks_by_offset[i].marks);
 	free (g_ctx.marks_by_offset);
+	free (g_ctx.offset_entries);
 
 	free (g_ctx.message);
 
@@ -419,6 +419,17 @@ app_mark_cmp (const void *first, const void *second)
 	return 0;
 }
 
+static size_t
+app_store_marks (struct mark **entries, size_t len)
+{
+	size_t result = g_ctx.offset_entries_len;
+	ARRAY_RESERVE (g_ctx.offset_entries, len);
+	memcpy (g_ctx.offset_entries + g_ctx.offset_entries_len, entries,
+		sizeof *entries * len);
+	g_ctx.offset_entries_len += len;
+	return result;
+}
+
 /// Flattens marks into sequential non-overlapping spans suitable for search
 /// by offset, assigning different colors to them in the process:
 /// @code
@@ -438,6 +449,9 @@ app_flatten_marks (void)
 	ARRAY (struct mark *, current)
 	ARRAY_INIT (current);
 	int current_color = 0;
+
+	// Make offset zero actually point to an empty entry
+	g_ctx.offset_entries[g_ctx.offset_entries_len++] = NULL;
 
 	struct mark *next = g_ctx.marks;
 	struct mark *end = next + g_ctx.marks_len;
@@ -461,19 +475,18 @@ app_flatten_marks (void)
 		// Add any new marks at "closest"
 		while (next < end && next->offset == closest)
 		{
-			ARRAY_RESERVE (current, 1);
 			current[current_len++] = next++;
+			ARRAY_RESERVE (current, 1);
 		}
+		current[current_len] = NULL;
 
 		// Save marks at that offset to be used by rendering
-		struct mark **marks = NULL;
+		size_t marks = 0;
 		int color = -1;
 
 		if (current_len)
 		{
-			marks = memcpy (xcalloc (sizeof *marks, current_len + 1),
-				current, sizeof *marks * current_len);
-
+			marks = app_store_marks (current, current_len + 1);
 			color = ATTRIBUTE_C1 + current_color++;
 			current_color %= 4;
 		}
@@ -601,13 +614,12 @@ app_draw_info (void)
 		return;
 
 	int x_offset = 70;
-	struct mark **iter = marks->marks;
+	struct mark *mark, **iter = g_ctx.offset_entries + marks->marks;
 	for (int y = 0; y < app_visible_rows (); y++)
 	{
 		// TODO: we can use the field background
 		// TODO: we can keep going through subsequent fields to fill the column
-		struct mark *mark;
-		if (!iter || !(mark = *iter++))
+		if (!(mark = *iter++))
 			break;
 
 		struct row_buffer buf;
