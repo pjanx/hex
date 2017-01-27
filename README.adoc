@@ -5,7 +5,7 @@ hex
 files using a set of Lua scripts, colorizing them and showing descriptions on
 the side.
 
-At the moment the project is still in a very early stage.
+At the moment there aren't that many features and we only have a few decoders.
 
 image::hex.png[align="center"]
 
@@ -69,15 +69,21 @@ following:
  - Xterm needs `XTerm*metaSendsEscape: true` for the default bindings to work
  - urxvt's 'vtwheel' plugin sabotages scrolling
 
+Performance
+-----------
+While the Lua API has been made considerably easy to write new decoders with,
+the design is far from efficient as we make tons of new formatted strings.
+Since we need Lua 5.3 features (64-bit integers), LuaJIT can't help us here.
+
+Similar software
+----------------
+https://codisec.com/veles/ can also highlight files but it's not scriptable.
+
 Contributing and Support
 ------------------------
 Use this project's GitHub to report any bugs, request features, or submit pull
 requests.  If you want to discuss this project, or maybe just hang out with
 the developer, feel free to join me at irc://irc.janouch.name, channel #dev.
-
-Similar software
-----------------
-https://codisec.com/veles/ can also highlight files but it's not scriptable.
 
 License
 -------
