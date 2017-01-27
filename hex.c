@@ -711,6 +711,7 @@ app_draw_footer (void)
 	row_buffer_align (&buf, COLS - right.len, APP_ATTR (BAR));
 	row_buffer_append (&buf, right.str, APP_ATTR (BAR));
 	app_flush_buffer (&buf, COLS, APP_ATTR (BAR));
+	str_free (&right);
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	if (g_ctx.view_cursor < g_ctx.data_offset
@@ -850,6 +851,7 @@ app_lua_coder_free (void *coder)
 	struct app_lua_coder *self = coder;
 	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_decode);
 	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_detect);
+	free (self);
 }
 
 static int
@@ -2024,6 +2026,7 @@ main (int argc, char *argv[])
 
 #ifdef HAVE_LUA
 	str_map_free (&g_ctx.coders);
+	lua_close (g_ctx.L);
 #endif // HAVE_LUA
 
 	return 0;
