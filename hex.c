@@ -787,7 +787,7 @@ app_on_refresh (void *user_data)
 	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
 	int64_t y = diff / ROW_SIZE;
 	int64_t x = diff % ROW_SIZE;
-	if (y >= 0 && y < app_visible_rows ())
+	if (diff >= 0 && y < app_visible_rows ())
 	{
 		curs_set (1);
 		move (y, 10 + x*2 + g_ctx.view_skip_nibble + x/8 + x/2);
