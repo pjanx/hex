@@ -1875,8 +1875,8 @@ main (int argc, char *argv[])
 		{ 'h', "help", NULL, 0, "display this help and exit" },
 		{ 'V', "version", NULL, 0, "output version information and exit" },
 
-		{ 'o', "offset", NULL, 0, "offset within the file" },
-		{ 's', "size", NULL, 0, "size limit (1G by default)" },
+		{ 'o', "offset", "OFFSET", 0, "offset within the file" },
+		{ 's', "size", "SIZE", 0, "size limit (1G by default)" },
 #ifdef HAVE_LUA
 		{ 't', "type", "TYPE", 0, "force interpretation as the given type" },
 #endif // HAVE_LUA
