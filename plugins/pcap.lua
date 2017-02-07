@@ -152,9 +152,9 @@ local decode = function (c)
 	local p, vmajor, vminor = c.position, c:u16 (), c:u16 ()
 	c (p, c.position - 1):mark ("PCAP version: %d.%d", vmajor, vminor)
 
-	local zone = c:i32 ("UTC to local TZ correction: %d seconds")
+	local zone = c:s32 ("UTC to local TZ correction: %d seconds")
 	local sigfigs = c:u32 ("timestamp accuracy")
-	local snaplen = c:u32 ("max. length of captured packets")
+	local snaplen = c:u32 ("max. length of captured packets: %d")
 
 	local network = c:u32 ("data link type: %s", function (u32)
 		name = link_types[u32]
@@ -164,19 +164,19 @@ local decode = function (c)
 
 	local i = 0
 	while not c.eof do
-		c (c.position, c.position + 23):mark ("PCAP record %d header", i)
-		i = i + 1
+		c (c.position, c.position + 15):mark ("PCAP record %d header", i)
 
-		local p, ts_sec, ts_usec = p, c:u32 (), c:u32 ()
+		local p, ts_sec, ts_usec = c.position, c:u32 (), c:u32 ()
 		c (p, c.position - 1):mark ("timestamp: %s.%06d",
-			os.date ("!%F %T", ts_sec + zonen), ts_usec)
-		local incl_len = c:u32 ("included record length")
-		local orig_len = c:u32 ("original record length")
+			os.date ("!%F %T", ts_sec + zone), ts_usec)
+		local incl_len = c:u32 ("included record length: %d")
+		local orig_len = c:u32 ("original record length: %d")
 
 		local p = c.position
 		c.position = c.position + incl_len
 		-- TODO: also decode record contents as per the huge table
 		c (p, c.position - 1):mark ("PCAP record %d data", i)
+		i = i + 1
 	end
 end
 
