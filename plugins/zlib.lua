@@ -18,7 +18,7 @@
 
 -- Based on RFC 1950, this format isn't very widely used
 local decode = function (c)
-	c.endianity = 'be'
+	c.endianity = 'le'
 
 	local deflate_levels = { "fastest", "fast", "default", "slowest" }
 	local deflate
@@ -54,4 +54,3 @@ local decode = function (c)
 end
 
 hex.register { type="zlib", detect=nil, decode=decode }
-
