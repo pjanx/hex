@@ -283,10 +283,10 @@ static void
 app_init_context (void)
 {
 	poller_init (&g_ctx.poller);
-	config_init (&g_ctx.config);
+	g_ctx.config = config_make ();
 
 	ARRAY_INIT (g_ctx.marks);
-	str_init (&g_ctx.mark_strings);
+	g_ctx.mark_strings = str_make ();
 	ARRAY_INIT (g_ctx.marks_by_offset);
 	ARRAY_INIT (g_ctx.offset_entries);
 
@@ -518,8 +518,7 @@ app_flush_buffer (struct row_buffer *buf, int width, chtype attrs)
 static void
 app_write_line (const char *str, chtype attrs)
 {
-	struct row_buffer buf;
-	row_buffer_init (&buf);
+	struct row_buffer buf = row_buffer_make ();
 	row_buffer_append (&buf, str, attrs);
 	app_flush_buffer (&buf, COLS, attrs);
 }
@@ -539,8 +538,7 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 	row_buffer_append (buf, row_addr_str, attrs);
 	free (row_addr_str);
 
-	struct row_buffer ascii;
-	row_buffer_init (&ascii);
+	struct row_buffer ascii = row_buffer_make ();
 	row_buffer_append (&ascii, "  ", attrs);
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
@@ -596,8 +594,7 @@ app_draw_view (void)
 
 		int attrs = (addr / ROW_SIZE & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
 
-		struct row_buffer buf;
-		row_buffer_init (&buf);
+		struct row_buffer buf = row_buffer_make ();
 		app_make_row (&buf, addr, attrs);
 		app_flush_buffer (&buf, COLS, attrs);
 	}
@@ -621,8 +618,7 @@ app_draw_info (void)
 		if (!(mark = *iter++))
 			break;
 
-		struct row_buffer buf;
-		row_buffer_init (&buf);
+		struct row_buffer buf = row_buffer_make ();
 		row_buffer_append (&buf,
 			g_ctx.mark_strings.str + mark->description, 0);
 
@@ -665,11 +661,9 @@ app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
 	row_buffer_append (b, key, APP_ATTR (FOOTER_HL));
 	free (key);
 
-	struct str value;
-	str_init (&value);
-
 	va_list ap;
 	va_start (ap, fmt);
+	struct str value = str_make ();
 	str_append_vprintf (&value, fmt, ap);
 	va_end (ap);
 
@@ -682,8 +676,7 @@ app_draw_footer (void)
 {
 	move (app_visible_rows (), 0);
 
-	struct row_buffer buf;
-	row_buffer_init (&buf);
+	struct row_buffer buf = row_buffer_make ();
 	row_buffer_append (&buf, APP_TITLE, APP_ATTR (BAR));
 
 	if (g_ctx.filename)
@@ -694,8 +687,7 @@ app_draw_footer (void)
 		free (filename);
 	}
 
-	struct str right;
-	str_init (&right);
+	struct str right = str_make ();
 	str_append_printf (&right, "  %08" PRIx64, g_ctx.view_cursor);
 	str_append (&right, g_ctx.endianity == ENDIANITY_LE ? "  LE  " : "  BE  ");
 
@@ -732,9 +724,9 @@ app_draw_footer (void)
 	int64_t len = end_addr - g_ctx.view_cursor;
 	uint8_t *p = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
 
-	struct row_buffer x; row_buffer_init (&x);
-	struct row_buffer u; row_buffer_init (&u);
-	struct row_buffer s; row_buffer_init (&s);
+	struct row_buffer x = row_buffer_make ();
+	struct row_buffer u = row_buffer_make ();
+	struct row_buffer s = row_buffer_make ();
 
 	if (len >= 1)
 	{
@@ -1031,8 +1023,7 @@ app_lua_chunk_identify (lua_State *L)
 {
 	(void) luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
 
-	struct str_map_iter iter;
-	str_map_iter_init (&iter, &g_ctx.coders);
+	struct str_map_iter iter = str_map_iter_make (&g_ctx.coders);
 	struct app_lua_coder *coder;
 	while ((coder = str_map_iter_next (&iter)))
 	{
@@ -1264,8 +1255,7 @@ app_lua_init (void)
 	if (!(g_ctx.L = lua_newstate (app_lua_alloc, NULL)))
 		exit_fatal ("Lua initialization failed");
 
-	str_map_init (&g_ctx.coders);
-	g_ctx.coders.free = app_lua_coder_free;
+	g_ctx.coders = str_map_make (app_lua_coder_free);
 
 	lua_atpanic (g_ctx.L, app_lua_panic);
 	luaL_openlibs (g_ctx.L);
@@ -1283,8 +1273,7 @@ app_lua_init (void)
 	luaL_setfuncs (g_ctx.L, app_lua_chunk_table, 0);
 	lua_pop (g_ctx.L, 1);
 
-	struct strv v;
-	strv_init (&v);
+	struct strv v = strv_make ();
 	get_xdg_data_dirs (&v);
 	for (size_t i = 0; i < v.len; i++)
 	{
@@ -1794,8 +1783,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 
 	in_processing = true;
 
-	struct str message;
-	str_init (&message);
+	struct str message = str_make ();
 	str_append (&message, quote);
 	str_append_vprintf (&message, fmt, ap);
 
@@ -1818,18 +1806,18 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 static void
 app_init_poller_events (void)
 {
-	poller_fd_init (&g_ctx.signal_event, &g_ctx.poller, g_signal_pipe[0]);
+	g_ctx.signal_event = poller_fd_make (&g_ctx.poller, g_signal_pipe[0]);
 	g_ctx.signal_event.dispatcher = app_on_signal_pipe_readable;
 	poller_fd_set (&g_ctx.signal_event, POLLIN);
 
-	poller_fd_init (&g_ctx.tty_event, &g_ctx.poller, STDIN_FILENO);
+	g_ctx.tty_event = poller_fd_make (&g_ctx.poller, STDIN_FILENO);
 	g_ctx.tty_event.dispatcher = app_on_tty_readable;
 	poller_fd_set (&g_ctx.tty_event, POLLIN);
 
-	poller_timer_init (&g_ctx.tk_timer, &g_ctx.poller);
+	g_ctx.tk_timer = poller_timer_make (&g_ctx.poller);
 	g_ctx.tk_timer.dispatcher = app_on_key_timer;
 
-	poller_idle_init (&g_ctx.refresh_event, &g_ctx.poller);
+	g_ctx.refresh_event = poller_idle_make (&g_ctx.poller);
 	g_ctx.refresh_event.dispatcher = app_on_refresh;
 }
 
@@ -1881,8 +1869,8 @@ main (int argc, char *argv[])
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
-	struct opt_handler oh;
-	opt_handler_init (&oh, argc, argv, opts, "[FILE]", "Hex viewer.");
+	struct opt_handler oh =
+		opt_handler_make (argc, argv, opts, "[FILE]", "Hex viewer.");
 	int64_t size_limit = 1 << 30;
 	const char *forced_type = NULL;
 
@@ -1927,8 +1915,7 @@ main (int argc, char *argv[])
 
 	if (forced_type && !strcmp (forced_type, "list"))
 	{
-		struct str_map_iter iter;
-		str_map_iter_init (&iter, &g_ctx.coders);
+		struct str_map_iter iter = str_map_iter_make (&g_ctx.coders);
 		while (str_map_iter_next (&iter))
 			puts (iter.link->key);
 		exit (EXIT_SUCCESS);
@@ -1971,9 +1958,7 @@ main (int argc, char *argv[])
 		}
 
 	// Read up to "size_limit" bytes of data into a buffer
-	struct str buf;
-	str_init (&buf);
-
+	struct str buf = str_make ();
 	while (buf.len < (size_t) size_limit)
 	{
 		str_reserve (&buf, 8192);
