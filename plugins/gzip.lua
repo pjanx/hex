@@ -121,7 +121,7 @@ local decode = function (c)
 		return "unknown: %d", u8
 	end)
 	c:u8 ("OS: %s", function (u8)
-		os = os_table[u8]
+		local os = os_table[u8]
 		if os then return os end
 		return "unknown: %d", u8
 	end)
