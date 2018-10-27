@@ -54,7 +54,6 @@ enum
 
 #define LIBERTY_WANT_POLLER
 #define LIBERTY_WANT_ASYNC
-#define LIBERTY_WANT_PROTO_HTTP
 #include "liberty/liberty.c"
 #include "liberty/liberty-tui.c"
 

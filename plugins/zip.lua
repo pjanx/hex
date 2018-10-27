@@ -42,6 +42,7 @@ local decode = function (c)
 	c (c.position, c.position + comment_len - 1):mark ("comment")
 
 	-- TODO: decode the fields better
+	--   https://stackoverflow.com/a/30028491/76313
 	-- TODO: also mark actual file data if someone wants to put in the effort
 	c.position = cd_offset + 1
 	for i = 1, cd_len do
