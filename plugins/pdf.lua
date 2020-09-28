@@ -5,7 +5,7 @@
 -- In practice almost useless, I just wanted to learn about the file format.
 -- FIXME: it's also not very robust and doesn't support all documents.
 --
--- Copyright (c) 2017, Přemysl Janouch <p@janouch.name>
+-- Copyright (c) 2017, Přemysl Eric Janouch <p@janouch.name>
 --
 -- Permission to use, copy, modify, and/or distribute this software for any
 -- purpose with or without fee is hereby granted.
