@@ -73,7 +73,8 @@ Since we need Lua 5.3 features (64-bit integers), LuaJIT can't help us here.
 
 Similar software
 ----------------
- * https://codisec.com/veles/ can also highlight files but it's not scriptable
+ * https://ide.kaitai.io/ and https://codisec.com/veles/ are essentially what
+   this project wanted to be but the description language is purely declarative
  * https://bitbucket.org/haypo/hachoir/wiki/Home seems to be strictly
    hierarchical, which may not work for file formats like ELF
 
