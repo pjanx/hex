@@ -339,9 +339,9 @@ app_free_context (void)
 	free (g_ctx.marks_by_offset);
 	free (g_ctx.offset_entries);
 
-	free (g_ctx.message);
+	cstr_set (&g_ctx.message, NULL);
 
-	free (g_ctx.filename);
+	cstr_set (&g_ctx.filename, NULL);
 	free (g_ctx.data);
 
 	if (g_ctx.tk)
@@ -1792,8 +1792,7 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 		fprintf (stderr, "%s\n", message.str);
 	else
 	{
-		free (g_ctx.message);
-		g_ctx.message = xstrdup (message.str);
+		cstr_set (&g_ctx.message, xstrdup (message.str));
 		g_ctx.message_attr = (intptr_t) user_data;
 		app_invalidate ();
 	}
