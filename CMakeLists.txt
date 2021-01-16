@@ -37,8 +37,8 @@ else ()
 	set (Termo_LIBRARIES termo-static)
 endif ()
 
-set (project_libraries ${UNISTRING_LIBRARIES}
-	${NCURSESW_LIBRARIES} termo-static)
+set (project_libraries ${Unistring_LIBRARIES}
+	${Ncursesw_LIBRARIES} termo-static)
 
 pkg_search_module (lua lua53 lua5.3 lua-5.3 lua>=5.3)
 option (WITH_LUA "Enable support for Lua plugins" ${lua_FOUND})
@@ -62,12 +62,12 @@ if (WITH_LUA)
 	endif ()
 endif ()
 
-include_directories (${UNISTRING_INCLUDE_DIRS}
-	${NCURSESW_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
+include_directories (${Unistring_INCLUDE_DIRS}
+	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
 
 # Configuration
 include (CheckFunctionExists)
-set (CMAKE_REQUIRED_LIBRARIES ${NCURSESW_LIBRARIES})
+set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
 # Generate a configuration file
