@@ -74,6 +74,7 @@ Similar software
    this project wanted to be but the description language is purely declarative
  * https://bitbucket.org/haypo/hachoir/wiki/Home seems to be strictly
    hierarchical, which may not work for file formats like ELF
+ * https://github.com/ruslashev/elfcat is a more interactive viewer for ELF
 
 Contributing and Support
 ------------------------
