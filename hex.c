@@ -1581,6 +1581,10 @@ g_default_bindings[] =
 
 	{ "Home",       ACTION_ROW_START,          {}},
 	{ "End",        ACTION_ROW_END,            {}},
+	{ "C-a",        ACTION_ROW_START,          {}},
+	{ "C-e",        ACTION_ROW_END,            {}},
+	{ "_",          ACTION_ROW_START,          {}},
+	{ "$",          ACTION_ROW_END,            {}},
 	{ "M-<",        ACTION_GOTO_TOP,           {}},
 	{ "M->",        ACTION_GOTO_BOTTOM,        {}},
 	{ "g",          ACTION_GOTO_TOP,           {}},
