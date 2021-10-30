@@ -7,3 +7,5 @@
 /hex.files
 /hex.creator*
 /hex.includes
+/hex.cflags
+/hex.cxxflags
