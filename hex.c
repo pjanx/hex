@@ -648,9 +648,9 @@ app_write_footer (struct row_buffer *b, char id, int len, const char *fmt, ...)
 static void
 app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
 {
-	const char *coding;
+	const char *coding = "";
 	if (len <= 1)
-		coding = "";
+		;
 	else if (g_ctx.endianity == ENDIANITY_LE)
 		coding = "le";
 	else if (g_ctx.endianity == ENDIANITY_BE)
