@@ -29,9 +29,9 @@ local decode = function (c)
 
 	local size = c:u32 ("header size: %d")
 	-- TODO: check the version, although it is essentially set in stone
-	--   as 1.0.0, with X.org being a nearly abandoned project
+	--   as 1.0, with X.org being a nearly abandoned project
 	local version = c:u32 ("file version: %s", function (u32)
-		return "%d.%d.%d", u32 >> 16, (u32 >> 8) & 255, u32 & 255
+		return "%d.%d", u32 >> 16, u32 & 0xffff
 	end)
 	local ntoc = c:u32 ("number of ToC entries: %d")
 
