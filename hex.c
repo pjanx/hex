@@ -568,7 +568,7 @@ app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
 			// TODO: leave it up to the user to decide what should be colored
 			uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
 			row_buffer_append (buf,
-				(char[3]) { hexa[cell >> 4], hexa[cell & 7], 0 },
+				(char[3]) { hexa[cell >> 4], hexa[cell & 0xf], 0 },
 				attrs | highlight);
 
 			char s[2] = { (cell >= 32 && cell < 127) ? cell : '.', 0 };
