@@ -72,6 +72,8 @@ Similar software
 ----------------
  * https://ide.kaitai.io/ and https://codisec.com/veles/ are essentially what
    this project wanted to be but the description language is purely declarative
+ * https://github.com/wader/fq goes a step above, allowing transformations
+   of identified data
  * https://bitbucket.org/haypo/hachoir/wiki/Home seems to be strictly
    hierarchical, which may not work for file formats like ELF
  * https://github.com/ruslashev/elfcat is a more interactive viewer for ELF
