@@ -1642,7 +1642,7 @@ app_process_termo_event (termo_key_t *event)
 		return app_process_action (binding->action);
 
 	// TODO: once we become an editor, use 0-9 a-f to overwrite nibbles
-	return false;
+	return event->type == TERMO_TYPE_FOCUS;
 }
 
 // --- Signals -----------------------------------------------------------------
