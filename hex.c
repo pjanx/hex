@@ -1871,8 +1871,8 @@ main (int argc, char *argv[])
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
-	struct opt_handler oh =
-		opt_handler_make (argc, argv, opts, "[FILE]", "Hex viewer.");
+	struct opt_handler oh = opt_handler_make (argc, argv, opts, "[FILE]",
+		"Interpreting hex viewer.");
 	int64_t size_limit = 1 << 30;
 	const char *forced_type = NULL;
 

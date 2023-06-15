@@ -14,10 +14,15 @@ Packages
 Regular releases are sporadic.  git master should be stable enough.  You can get
 a package with the latest development version from Archlinux's AUR.
 
+Documentation
+-------------
+See the link:hex.adoc[man page] for information about usage.
+The rest of this README will concern itself with externalities.
+
 Building and Running
 --------------------
-Build dependencies: CMake, pkg-config, help2man, liberty (included),
-                    termo (included) +
+Build dependencies: CMake, pkg-config, awk, liberty (included),
+ termo (included), asciidoctor or asciidoc (recommended but optional) +
 Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting)
 
  $ git clone --recursive https://git.janouch.name/p/hex.git
@@ -37,22 +42,6 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
 
 Having the program installed, optionally create a configuration file and run it
 on a file of your choice.
-
-Configuration
--------------
-Create _~/.config/hex/hex.conf_ with contents like the following:
-
-....
-colors = {
-	footer     = ""
-	footer_hl  = "bold"
-	bar        = "reverse"
-	bar_hl     = "reverse bold"
-	even       = ""
-	odd        = ""
-	selection  = "reverse"
-}
-....
 
 Terminal caveats
 ----------------

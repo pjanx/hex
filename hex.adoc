@@ -1,0 +1,81 @@
+hex(1)
+======
+:doctype: manpage
+:manmanual: hex Manual
+:mansource: hex {release-version}
+
+Name
+----
+hex - Interpreting hex viewer
+
+Synopsis
+--------
+*hex* [_OPTION_]... [_PATH_]
+
+Description
+-----------
+*hex* is a hex viewer that uses Lua scripts to interpret fields within files,
+colorizes them, and shows their descriptions on the side.
+
+When run without arguments, it reads from its standard input stream.
+
+Options
+-------
+*-o*, *--offset* _OFFSET_::
+	Byte offset into the file.  All preceding data will be ignored.
+
+*-s*, *--size* _SIZE_::
+	Size limit in bytes.  Any following data will be ignored.
++
+The _SIZE_ argument accepts similar suffixes as in *dd*(1): _c_=1,
+_w_=2, _b_=512, _K_=1024, _KB_=1000, _M_=1024K, _MB_=1000KB,
+_G_=1024M, and _GB_=1000M.  The default value is 1G.
+
+*-t*, *--type* _TYPE_::
+	Force interpretation as the given type, skipping autodetection.
+	Pass in "list" for a listing of all available decoders.
+
+*-d*, *--debug*::
+	Run in debug mode.
+
+*-h*, *--help*::
+	Display a help message and exit.
+
+*-V*, *--version*::
+	Output version information and exit.
+
+Configuration
+-------------
+Create _~/.config/hex/hex.conf_ with contents like the following:
+
+....
+colors = {
+	footer     = ""
+	footer_hl  = "bold"
+	bar        = "reverse"
+	bar_hl     = "reverse bold"
+	even       = ""
+	odd        = ""
+	selection  = "reverse"
+}
+....
+
+Terminal attributes are accepted in a format similar to that of *git-config*(1),
+only named colours aren't supported.
+
+Files
+-----
+*hex* follows the XDG Base Directory Specification.
+
+_~/.config/hex/hex.conf_::
+	The configuration file.
+
+_~/.local/share/hex/plugins/_::
+_/usr/local/share/hex/plugins/_::
+_/usr/share/hex/plugins/_::
+	Plugins are loaded from these directories, in order.
+
+Reporting bugs
+--------------
+Use https://git.janouch.name/p/hex to report bugs, request features,
+or submit pull requests.

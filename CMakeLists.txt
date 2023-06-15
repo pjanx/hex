@@ -90,20 +90,42 @@ include (GNUInstallDirs)
 install (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
-# Generate documentation from program help
-find_program (HELP2MAN_EXECUTABLE help2man)
-if (NOT HELP2MAN_EXECUTABLE)
-	message (FATAL_ERROR "help2man not found")
+# Generate documentation from text markup
+find_program (ASCIIDOCTOR_EXECUTABLE asciidoctor)
+find_program (A2X_EXECUTABLE a2x)
+if (NOT ASCIIDOCTOR_EXECUTABLE AND NOT A2X_EXECUTABLE)
+	message (WARNING "Neither asciidoctor nor a2x were found, "
+		"falling back to a substandard manual page generator")
 endif ()
 
 foreach (page ${PROJECT_NAME})
 	set (page_output "${PROJECT_BINARY_DIR}/${page}.1")
 	list (APPEND project_MAN_PAGES "${page_output}")
-	add_custom_command (OUTPUT ${page_output}
-		COMMAND ${HELP2MAN_EXECUTABLE} -N
-			"${PROJECT_BINARY_DIR}/${page}" -o ${page_output}
-		DEPENDS ${page}
-		COMMENT "Generating man page for ${page}" VERBATIM)
+	if (ASCIIDOCTOR_EXECUTABLE)
+		add_custom_command (OUTPUT ${page_output}
+			COMMAND ${ASCIIDOCTOR_EXECUTABLE} -b manpage
+				-a release-version=${PROJECT_VERSION}
+				-o "${page_output}"
+				"${PROJECT_SOURCE_DIR}/${page}.adoc"
+			DEPENDS ${page}.adoc
+			COMMENT "Generating man page for ${page}" VERBATIM)
+	elseif (A2X_EXECUTABLE)
+		add_custom_command (OUTPUT ${page_output}
+			COMMAND ${A2X_EXECUTABLE} --doctype manpage --format manpage
+				-a release-version=${PROJECT_VERSION}
+				-D "${PROJECT_BINARY_DIR}"
+				"${PROJECT_SOURCE_DIR}/${page}.adoc"
+			DEPENDS ${page}.adoc
+			COMMENT "Generating man page for ${page}" VERBATIM)
+	else ()
+		set (ASCIIMAN ${PROJECT_SOURCE_DIR}/liberty/tools/asciiman.awk)
+		add_custom_command (OUTPUT ${page_output}
+			COMMAND env LC_ALL=C asciidoc-release-version=${PROJECT_VERSION}
+				awk -f ${ASCIIMAN} "${PROJECT_SOURCE_DIR}/${page}.adoc"
+				> ${page_output}
+			DEPENDS ${page}.adoc ${ASCIIMAN}
+			COMMENT "Generating man page for ${page}" VERBATIM)
+	endif ()
 endforeach ()
 
 add_custom_target (docs ALL DEPENDS ${project_MAN_PAGES})
