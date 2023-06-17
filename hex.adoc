@@ -38,6 +38,10 @@ _G_=1024M, and _GB_=1000M.  The default value is 1G.
 *-d*, *--debug*::
 	Run in debug mode.
 
+*-x*, *--x11*::
+	Use an X11 interface even when run from a terminal.
+	Note that the application may be built with this feature disabled.
+
 *-h*, *--help*::
 	Display a help message and exit.
 

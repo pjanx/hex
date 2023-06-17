@@ -1,7 +1,7 @@
 /*
  * hex -- hex viewer
  *
- * Copyright (c) 2016 - 2017, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2023, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -20,6 +20,8 @@
 
 // We "need" to have an enum for attributes before including liberty.
 // Avoiding colours in the defaults here in order to support dumb terminals.
+// FIXME: we need a 256color default palette that fails gracefully
+//   to something like underlined fields
 #define ATTRIBUTE_TABLE(XX)                                    \
 	XX( FOOTER,     "footer",     -1,  -1, 0                  ) \
 	XX( FOOTER_HL,  "footer_hl",  -1,  -1, A_BOLD             ) \
@@ -55,48 +57,23 @@ enum
 #define LIBERTY_WANT_POLLER
 #define LIBERTY_WANT_ASYNC
 #include "liberty/liberty.c"
-#include "liberty/liberty-tui.c"
+
+#ifdef WITH_X11
+#define LIBERTY_XUI_WANT_X11
+#endif // WITH_X11
+#include "liberty/liberty-xui.c"
 
 #include <locale.h>
-#include <termios.h>
-#ifndef TIOCGWINSZ
-#include <sys/ioctl.h>
-#endif  // ! TIOCGWINSZ
 
-#include "termo.h"
+#ifdef WITH_LUA
+#include <dirent.h>
 
-#ifdef HAVE_LUA
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
-
-#include <dirent.h>
-#endif // HAVE_LUA
+#endif // WITH_LUA
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
-
-// --- Utilities ---------------------------------------------------------------
-
-// The standard endwin/refresh sequence makes the terminal flicker
-static void
-update_curses_terminal_size (void)
-{
-#if defined HAVE_RESIZETERM && defined TIOCGWINSZ
-	struct winsize size;
-	if (!ioctl (STDOUT_FILENO, TIOCGWINSZ, (char *) &size))
-	{
-		char *row = getenv ("LINES");
-		char *col = getenv ("COLUMNS");
-		unsigned long tmp;
-		resizeterm (
-			(row && xstrtoul (&tmp, row, 10)) ? tmp : size.ws_row,
-			(col && xstrtoul (&tmp, col, 10)) ? tmp : size.ws_col);
-	}
-#else  // HAVE_RESIZETERM && TIOCGWINSZ
-	endwin ();
-	refresh ();
-#endif  // HAVE_RESIZETERM && TIOCGWINSZ
-}
 
 // --- Application -------------------------------------------------------------
 
@@ -136,22 +113,17 @@ static struct app_context
 	// Event loop:
 
 	struct poller poller;               ///< Poller
-	bool quitting;                      ///< Quit signal for the event loop
 	bool polling;                       ///< The event loop is running
 
-	struct poller_fd tty_event;         ///< Terminal input event
 	struct poller_fd signal_event;      ///< Signal FD event
 
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 	lua_State *L;                       ///< Lua state
 	int ref_format;                     ///< Reference to "string.format"
 	struct str_map coders;              ///< Map of coders by name
-#endif // HAVE_LUA
+#endif // WITH_LUA
 
 	// Data:
-
-	char *message;                      ///< Last logged message
-	int message_attr;                   ///< Attributes for the logged message
 
 	struct config config;               ///< Program configuration
 	char *filename;                     ///< Target filename
@@ -176,15 +148,12 @@ static struct app_context
 
 	enum endianity endianity;           ///< Endianity
 
-	// Emulated widgets:
+	// User interface:
 
-	struct poller_idle refresh_event;   ///< Refresh the screen
+	struct poller_timer message_timer;  ///< Message timeout
+	char *message;                      ///< Last logged message
 
-	// Terminal:
-
-	termo_t *tk;                        ///< termo handle
-	struct poller_timer tk_timer;       ///< termo timeout timer
-	bool locale_is_utf8;                ///< The locale is Unicode
+	int digitw;                         ///< Width of a single digit
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
@@ -277,6 +246,13 @@ app_init_attributes (void)
 #undef XX
 }
 
+static bool
+app_on_insufficient_color (void)
+{
+	app_init_attributes ();
+	return true;
+}
+
 static void
 app_init_context (void)
 {
@@ -288,44 +264,7 @@ app_init_context (void)
 	ARRAY_INIT (g_ctx.marks_by_offset);
 	ARRAY_INIT (g_ctx.offset_entries);
 
-	// This is also approximately what libunistring does internally,
-	// since the locale name is canonicalized by locale_charset().
-	// Note that non-Unicode locales are handled pretty inefficiently.
-	g_ctx.locale_is_utf8 = !strcasecmp_ascii (locale_charset (), "UTF-8");
-
 	app_init_attributes ();
-}
-
-static void
-app_init_terminal (void)
-{
-	TERMO_CHECK_VERSION;
-	if (!(g_ctx.tk = termo_new (STDIN_FILENO, NULL, 0)))
-		abort ();
-	if (!initscr () || nonl () == ERR)
-		abort ();
-
-	// By default we don't use any colors so they're not required...
-	if (start_color () == ERR
-	 || use_default_colors () == ERR
-	 || COLOR_PAIRS <= ATTRIBUTE_COUNT)
-		return;
-
-	for (int a = 0; a < ATTRIBUTE_COUNT; a++)
-	{
-		// ...thus we can reset back to defaults even after initializing some
-		if (g_ctx.attrs[a].fg >= COLORS || g_ctx.attrs[a].fg < -1
-		 || g_ctx.attrs[a].bg >= COLORS || g_ctx.attrs[a].bg < -1)
-		{
-			// FIXME: we need a 256color default palette that fails gracefully
-			//   to something like underlined fields
-			app_init_attributes ();
-			return;
-		}
-
-		init_pair (a + 1, g_ctx.attrs[a].fg, g_ctx.attrs[a].bg);
-		g_ctx.attrs[a].attrs |= COLOR_PAIR (a + 1);
-	}
 }
 
 static void
@@ -343,34 +282,12 @@ app_free_context (void)
 
 	cstr_set (&g_ctx.filename, NULL);
 	free (g_ctx.data);
-
-	if (g_ctx.tk)
-		termo_destroy (g_ctx.tk);
 }
 
 static void
 app_quit (void)
 {
-	g_ctx.quitting = true;
 	g_ctx.polling = false;
-}
-
-static bool
-app_is_character_in_locale (ucs4_t ch)
-{
-	// Avoid the overhead joined with calling iconv() for all characters.
-	if (g_ctx.locale_is_utf8)
-		return true;
-
-	// The library really creates a new conversion object every single time
-	// and doesn't provide any smarter APIs.  Luckily, most users use UTF-8.
-	size_t len;
-	char *tmp = u32_conv_to_encoding (locale_charset (), iconveh_error,
-		&ch, 1, NULL, NULL, &len);
-	if (!tmp)
-		return false;
-	free (tmp);
-	return true;
 }
 
 // --- Field marking -----------------------------------------------------------
@@ -495,30 +412,58 @@ app_flatten_marks (void)
 	free (current);
 }
 
-// --- Rendering ---------------------------------------------------------------
+// --- Layouting ---------------------------------------------------------------
 
-static void
-app_invalidate (void)
+enum
 {
-	poller_idle_set (&g_ctx.refresh_event);
+	WIDGET_NONE = 0, WIDGET_HEX, WIDGET_ASCII, WIDGET_ENDIANITY,
+};
+
+struct layout
+{
+	struct widget *head;
+	struct widget *tail;
+};
+
+static struct widget *
+app_label (chtype attrs, const char *label)
+{
+	return g_xui.ui->label (attrs, 0, label);
 }
 
-static void
-app_flush_buffer (struct row_buffer *buf, int width, chtype attrs)
+static struct widget *
+app_mono_label (chtype attrs, const char *label)
 {
-	row_buffer_align (buf, width, attrs);
-	row_buffer_flush (buf);
-	row_buffer_free (buf);
+	return g_xui.ui->label (attrs, XUI_ATTR_MONOSPACE, label);
 }
 
-/// Write the given UTF-8 string padded with spaces.
-/// @param[in] attrs  Text attributes for the text, including padding.
-static void
-app_write_line (const char *str, chtype attrs)
+static struct widget *
+app_mono_padding (chtype attrs, float width, float height)
 {
-	struct row_buffer buf = row_buffer_make ();
-	row_buffer_append (&buf, str, attrs);
-	app_flush_buffer (&buf, COLS, attrs);
+	struct widget *w = g_xui.ui->padding (attrs, width, height);
+	w->width = width * g_ctx.digitw;
+	return w;
+}
+
+static struct widget *
+app_push (struct layout *l, struct widget *w)
+{
+	LIST_APPEND_WITH_TAIL (l->head, l->tail, w);
+	return w;
+}
+
+static struct widget *
+app_push_hfill (struct layout *l, struct widget *w)
+{
+	w->width = -1;
+	return app_push (l, w);
+}
+
+static struct widget *
+app_push_vfill (struct layout *l, struct widget *w)
+{
+	w->height = -1;
+	return app_push (l, w);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -526,104 +471,130 @@ app_write_line (const char *str, chtype attrs)
 static int
 app_visible_rows (void)
 {
-	return MAX (0, LINES - 1 /* bar */ - 3 /* decoder */ - !!g_ctx.message);
+	int occupied = 1 /* bar */ + 3 /* decoder */;
+	return MAX (0, g_xui.height - occupied * g_xui.vunit) / g_xui.vunit;
 }
 
-static void
-app_make_row (struct row_buffer *buf, int64_t addr, int attrs)
+static inline void
+app_layout_cell (struct layout *hex, struct layout *ascii, int attrs,
+	int64_t addr)
 {
+	const char *hexa = "0123456789abcdef";
+
+	struct marks_by_offset *marks = app_marks_at_offset (addr);
+	int attrs_mark = attrs;
+	if (marks && marks->color >= 0)
+		attrs_mark = g_ctx.attrs[marks->color].attrs;
+
+	if (addr >= g_ctx.view_cursor
+	 && addr <  g_ctx.view_cursor + 8)
+	{
+		attrs      |= A_UNDERLINE;
+		attrs_mark |= A_UNDERLINE;
+	}
+
+	// TODO: leave it up to the user to decide what should be colored
+	uint8_t cell = g_ctx.data[addr - g_ctx.data_offset];
+	if (addr != g_ctx.view_cursor)
+	{
+		char s[] = { hexa[cell >> 4], hexa[cell & 0xf], 0 };
+		app_push (hex, app_mono_label (attrs, s));
+	}
+	else if (g_ctx.view_skip_nibble)
+	{
+		char s1[] = { hexa[cell >> 4], 0 }, s2[] = { hexa[cell & 0xf], 0 };
+		app_push (hex, app_mono_label (attrs, s1));
+		app_push (hex, app_mono_label (attrs ^ A_REVERSE, s2));
+	}
+	else
+	{
+		char s1[] = { hexa[cell >> 4], 0 }, s2[] = { hexa[cell & 0xf], 0 };
+		app_push (hex, app_mono_label (attrs ^ A_REVERSE, s1));
+		app_push (hex, app_mono_label (attrs, s2));
+	}
+
+	char s[] = { (cell >= 32 && cell < 127) ? cell : '.', 0 };
+	app_push (ascii, app_mono_label (attrs_mark, s));
+}
+
+// XXX: This per-character layouting is very inefficient, but not extremely so.
+static struct widget *
+app_layout_row (int64_t addr, int y, int attrs)
+{
+	struct layout l = {};
 	char *row_addr_str = xstrdup_printf ("%08" PRIx64, addr);
-	row_buffer_append (buf, row_addr_str, attrs);
+	app_push (&l, app_mono_label (attrs, row_addr_str));
 	free (row_addr_str);
 
-	struct row_buffer ascii = row_buffer_make ();
-	row_buffer_append (&ascii, "  ", attrs);
+	struct layout hex = {};
+	struct layout ascii = {};
+	app_push (&ascii, app_mono_padding (attrs, 2, 1));
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
-	const char *hexa = "0123456789abcdef";
 	for (int x = 0; x < ROW_SIZE; x++)
 	{
-		if (x % 8 == 0) row_buffer_append (buf, " ", attrs);
-		if (x % 2 == 0) row_buffer_append (buf, " ", attrs);
+		if (x % 8 == 0) app_push (&hex, app_mono_padding (attrs, 1, 1));
+		if (x % 2 == 0) app_push (&hex, app_mono_padding (attrs, 1, 1));
 
 		int64_t cell_addr = addr + x;
 		if (cell_addr < g_ctx.data_offset
 		 || cell_addr >= end_addr)
 		{
-			row_buffer_append (buf, "  ", attrs);
-			row_buffer_append (&ascii, " ", attrs);
+			app_push (&hex,   app_mono_padding (attrs, 2, 1));
+			app_push (&ascii, app_mono_padding (attrs, 1, 1));
 		}
 		else
-		{
-			int attrs_mark = attrs;
-			struct marks_by_offset *marks = app_marks_at_offset (cell_addr);
-			if (marks && marks->color >= 0)
-				attrs_mark = g_ctx.attrs[marks->color].attrs;
-
-			int highlight = 0;
-			if (cell_addr >= g_ctx.view_cursor
-			 && cell_addr <  g_ctx.view_cursor + 8)
-				highlight = A_UNDERLINE;
-
-			// TODO: leave it up to the user to decide what should be colored
-			uint8_t cell = g_ctx.data[cell_addr - g_ctx.data_offset];
-			row_buffer_append (buf,
-				(char[3]) { hexa[cell >> 4], hexa[cell & 0xf], 0 },
-				attrs | highlight);
-
-			char s[2] = { (cell >= 32 && cell < 127) ? cell : '.', 0 };
-			row_buffer_append (&ascii, s, attrs_mark | highlight);
-		}
+			app_layout_cell (&hex, &ascii, attrs, cell_addr);
 	}
-	row_buffer_append_buffer (buf, &ascii);
-	row_buffer_free (&ascii);
+
+	struct widget *w = NULL;
+	app_push (&l, (w = xui_hbox (hex.head)))->id = WIDGET_HEX;
+	w->userdata = y;
+	app_push (&l, (w = xui_hbox (ascii.head)))->id = WIDGET_ASCII;
+	w->userdata = y;
+	return xui_hbox (l.head);
 }
 
-static void
-app_draw_view (void)
+static struct widget *
+app_layout_view (void)
 {
-	move (0, 0);
-
+	struct layout l = {};
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
-	for (int y = 0; y < app_visible_rows (); y++)
+	for (int y = 0; y <= app_visible_rows (); y++)
 	{
 		int64_t addr = g_ctx.view_top + y * ROW_SIZE;
 		if (addr >= end_addr)
 			break;
 
 		int attrs = (addr / ROW_SIZE & 1) ? APP_ATTR (ODD) : APP_ATTR (EVEN);
-
-		struct row_buffer buf = row_buffer_make ();
-		app_make_row (&buf, addr, attrs);
-		app_flush_buffer (&buf, COLS, attrs);
+		app_push (&l, app_layout_row (addr, y, attrs));
 	}
+	return xui_vbox (l.head);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-static void
-app_draw_info (void)
+static struct widget *
+app_layout_info (void)
 {
 	const struct marks_by_offset *marks;
+	struct layout l = {};
 	if (!(marks = app_marks_at_offset (g_ctx.view_cursor)))
-		return;
+		goto out;
 
-	int x_offset = 70;
 	struct mark *mark, **iter = g_ctx.offset_entries + marks->marks;
-	for (int y = 0; y < app_visible_rows (); y++)
+	for (int y = 0; y <= app_visible_rows (); y++)
 	{
 		// TODO: we can use the field background
 		// TODO: we can keep going through subsequent fields to fill the column
 		if (!(mark = *iter++))
 			break;
 
-		struct row_buffer buf = row_buffer_make ();
-		row_buffer_append (&buf,
-			g_ctx.mark_strings.str + mark->description, 0);
-
-		move (y, x_offset);
-		app_flush_buffer (&buf, COLS - x_offset, 0);
+		const char *description = g_ctx.mark_strings.str + mark->description;
+		app_push (&l, app_label (0, description));
 	}
+out:
+	return xui_vbox (l.head);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -641,24 +612,27 @@ app_decode (const uint8_t *p, size_t len, enum endianity endianity)
 	return val;
 }
 
-static void
-app_write_footer (struct row_buffer *b, char id, int len, const char *fmt, ...)
-	ATTRIBUTE_PRINTF (4, 5);
+static struct widget *
+app_footer_field (char id, int size, const char *fmt, ...)
+	ATTRIBUTE_PRINTF (3, 4);
 
-static void
-app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
+static struct widget *
+app_footer_field (char id, int size, const char *fmt, ...)
 {
 	const char *coding = "";
-	if (len <= 1)
+	if (size <= 1)
 		;
 	else if (g_ctx.endianity == ENDIANITY_LE)
 		coding = "le";
 	else if (g_ctx.endianity == ENDIANITY_BE)
 		coding = "be";
 
-	char *key = xstrdup_printf ("%c%d%s", id, len * 8, coding);
-	row_buffer_append (b, key, APP_ATTR (FOOTER_HL));
+	struct layout l = {};
+	char *key = xstrdup_printf ("%c%d%s", id, size * 8, coding);
+	app_push (&l, app_mono_label (APP_ATTR (FOOTER_HL), key));
 	free (key);
+
+	app_push (&l, app_mono_padding (0, 1, 1));
 
 	va_list ap;
 	va_start (ap, fmt);
@@ -666,39 +640,65 @@ app_footer_field (struct row_buffer *b, char id, int len, const char *fmt, ...)
 	str_append_vprintf (&value, fmt, ap);
 	va_end (ap);
 
-	row_buffer_append (b, value.str, APP_ATTR (FOOTER));
+	// Right-aligned
+	app_push_hfill (&l, g_xui.ui->padding (0, 1, 1));
+	app_push (&l, app_mono_label (APP_ATTR (FOOTER), value.str));
 	str_free (&value);
+	return xui_hbox (l.head);
 }
 
 static void
-app_draw_footer (void)
+app_footer_group (struct layout *out, int size, int64_t u, int64_t s, int align)
 {
-	move (app_visible_rows (), 0);
+	struct layout l = {};
+	app_push (&l, app_footer_field ('x', size, "%0*" PRIx64, size * 2, u));
+	app_push (&l, app_footer_field ('u', size, "%" PRIu64, u));
+	app_push (&l, app_footer_field ('s', size, "%" PRId64, s));
+	l.head->width = MAX (l.head->width,
+		g_ctx.digitw * align /* sign + ceil(log10(U/INT*_MAX)) */);
+	if (out->head)
+		app_push (out, app_mono_padding (APP_ATTR (FOOTER), 2, 1));
+	app_push (out, xui_vbox (l.head));
+}
 
-	struct row_buffer buf = row_buffer_make ();
-	row_buffer_append (&buf, APP_TITLE, APP_ATTR (BAR));
+static struct widget *
+app_layout_footer (void)
+{
+	struct layout statusl = {};
+	app_push (&statusl, app_label (APP_ATTR (BAR), APP_TITLE));
+	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
-	if (g_ctx.filename)
+	if (g_ctx.message)
+		app_push (&statusl, app_label (APP_ATTR (BAR_HL), g_ctx.message));
+	else if (g_ctx.filename)
 	{
-		row_buffer_append (&buf, "  ", APP_ATTR (BAR));
 		char *filename = (char *) u8_strconv_from_locale (g_ctx.filename);
-		row_buffer_append (&buf, filename, APP_ATTR (BAR_HL));
+		app_push (&statusl, app_label (APP_ATTR (BAR_HL), filename));
 		free (filename);
+		app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 	}
 
-	struct str right = str_make ();
-	str_append_printf (&right, "  %08" PRIx64, g_ctx.view_cursor);
-	str_append (&right, g_ctx.endianity == ENDIANITY_LE ? "  LE  " : "  BE  ");
+	app_push_hfill (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
+
+	char *address = xstrdup_printf ("%08" PRIx64, g_ctx.view_cursor);
+	app_push (&statusl, app_mono_label (APP_ATTR (BAR), address));
+	free (address);
+	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
+
+	app_push (&statusl, app_mono_label (APP_ATTR (BAR),
+		g_ctx.endianity == ENDIANITY_LE ? "LE" : "BE"))->id = WIDGET_ENDIANITY;
+	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
 	int64_t top = g_ctx.view_top;
 	int64_t bot = g_ctx.view_top + app_visible_rows () * ROW_SIZE;
+	struct str where = str_make ();
 	if (top <= g_ctx.data_offset
 	 && bot >= g_ctx.data_offset + g_ctx.data_len)
-		str_append (&right, "All");
+		str_append (&where, "All");
 	else if (top <= g_ctx.data_offset)
-		str_append (&right, "Top");
+		str_append (&where, "Top");
 	else if (bot >= g_ctx.data_offset + g_ctx.data_len)
-		str_append (&right, "Bot");
+		str_append (&where, "Bot");
 	else
 	{
 		int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
@@ -707,90 +707,67 @@ app_draw_footer (void)
 
 		cur -= g_ctx.data_offset / ROW_SIZE;
 		max -= g_ctx.data_offset / ROW_SIZE;
-		str_append_printf (&right, "%2d%%", (int) (100 * cur / max));
+		str_append_printf (&where, "%2d%%", (int) (100 * cur / max));
 	}
 
-	row_buffer_align (&buf, COLS - right.len, APP_ATTR (BAR));
-	row_buffer_append (&buf, right.str, APP_ATTR (BAR));
-	app_flush_buffer (&buf, COLS, APP_ATTR (BAR));
-	str_free (&right);
+	app_push (&statusl, app_mono_label (APP_ATTR (BAR), where.str));
+	str_free (&where);
 
 	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
 	if (g_ctx.view_cursor < g_ctx.data_offset
 	 || g_ctx.view_cursor >= end_addr)
-		return;
+		return xui_hbox (statusl.head);
 
 	int64_t len = end_addr - g_ctx.view_cursor;
 	uint8_t *p = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
 
-	struct row_buffer x = row_buffer_make ();
-	struct row_buffer u = row_buffer_make ();
-	struct row_buffer s = row_buffer_make ();
-
+	// TODO: The entire bottom part perhaps should be pre-painted
+	//   with APP_ATTR (FOOTER).
+	struct layout groupl = {};
 	if (len >= 1)
-	{
-		app_footer_field (&x, 'x', 1, "   %02x  ", p[0]);
-		app_footer_field (&u, 'u', 1, " %4u  ", p[0]);
-		app_footer_field (&s, 's', 1, " %4d  ", (int8_t) p[0]);
-	}
+		app_footer_group (&groupl, 1, p[0], (int8_t) p[0], 3 + 4);
 	if (len >= 2)
 	{
-		uint16_t val = app_decode (p, 2, g_ctx.endianity);
-		app_footer_field (&x, 'x', 2, "   %04x  ", val);
-		app_footer_field (&u, 'u', 2, " %6u  ", val);
-		app_footer_field (&s, 's', 2, " %6d  ", (int16_t) val);
+		uint16_t value = app_decode (p, 2, g_ctx.endianity);
+		app_footer_group (&groupl, 2, value, (int16_t) value, 6 + 6);
 	}
 	if (len >= 4)
 	{
-		uint32_t val = app_decode (p, 4, g_ctx.endianity);
-		app_footer_field (&x, 'x', 4, "    %08x  ", val);
-		app_footer_field (&u, 'u', 4, " %11u  ", val);
-		app_footer_field (&s, 's', 4, " %11d  ", (int32_t) val);
+		uint32_t value = app_decode (p, 4, g_ctx.endianity);
+		app_footer_group (&groupl, 4, value, (int32_t) value, 6 + 11);
 	}
 	if (len >= 8)
 	{
-		uint64_t val = app_decode (p, 8, g_ctx.endianity);
-		app_footer_field (&x, 'x', 8, "     %016" PRIx64, val);
-		app_footer_field (&u, 'u', 8, " %20" PRIu64, val);
-		app_footer_field (&s, 's', 8, " %20" PRId64, (int64_t) val);
+		uint64_t value = app_decode (p, 8, g_ctx.endianity);
+		app_footer_group (&groupl, 8, value, (int64_t) value, 6 + 20);
 	}
 
-	app_flush_buffer (&x, COLS, APP_ATTR (FOOTER));
-	app_flush_buffer (&u, COLS, APP_ATTR (FOOTER));
-	app_flush_buffer (&s, COLS, APP_ATTR (FOOTER));
-
-	if (g_ctx.message)
-		app_write_line (g_ctx.message, g_ctx.attrs[g_ctx.message_attr].attrs);
+	struct layout lll = {};
+	app_push (&lll, xui_hbox (statusl.head));
+	app_push (&lll, xui_hbox (groupl.head));
+	return xui_vbox (lll.head);
 }
 
 static void
-app_on_refresh (void *user_data)
+app_layout (void)
 {
-	(void) user_data;
-	poller_idle_reset (&g_ctx.refresh_event);
+	struct layout topl = {};
+	app_push (&topl, app_layout_view ());
+	app_push (&topl, g_xui.ui->padding (0, 1, 1));
+	app_push_hfill (&topl, app_layout_info ());
 
-	erase ();
-	app_draw_view ();
-	app_draw_info ();
-	app_draw_footer ();
+	struct layout l = {};
+	app_push_vfill (&l, xui_hbox (topl.head));
+	app_push (&l, app_layout_footer ());
 
-	int64_t diff = g_ctx.view_cursor - g_ctx.view_top;
-	int64_t y = diff / ROW_SIZE;
-	int64_t x = diff % ROW_SIZE;
-	if (diff >= 0 && y < app_visible_rows ())
-	{
-		curs_set (1);
-		move (y, 10 + x*2 + g_ctx.view_skip_nibble + x/8 + x/2);
-	}
-	else
-		curs_set (0);
-
-	refresh ();
+	struct widget *root = g_xui.widgets = xui_vbox (l.head);
+	root->width = g_xui.width;
+	root->height = g_xui.height;
 }
 
 // --- Lua ---------------------------------------------------------------------
 
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 
 static void *
 app_lua_alloc (void *ud, void *ptr, size_t o_size, size_t n_size)
@@ -1284,7 +1261,7 @@ app_lua_init (void)
 	strv_free (&v);
 }
 
-#endif // HAVE_LUA
+#endif // WITH_LUA
 
 // --- Actions -----------------------------------------------------------------
 
@@ -1296,7 +1273,7 @@ app_fix_view_range (void)
 	if (g_ctx.view_top < data_view_start)
 	{
 		g_ctx.view_top = data_view_start;
-		app_invalidate ();
+		xui_invalidate ();
 		return false;
 	}
 
@@ -1310,7 +1287,7 @@ app_fix_view_range (void)
 	if (g_ctx.view_top > max_view_top)
 	{
 		g_ctx.view_top = max_view_top;
-		app_invalidate ();
+		xui_invalidate ();
 		return false;
 	}
 	return true;
@@ -1321,7 +1298,7 @@ static bool
 app_scroll (int n)
 {
 	g_ctx.view_top += n * ROW_SIZE;
-	app_invalidate ();
+	xui_invalidate ();
 	return app_fix_view_range ();
 }
 
@@ -1348,7 +1325,7 @@ app_move_cursor_by_rows (int diff)
 
 	bool result = g_ctx.view_cursor == fixed;
 	g_ctx.view_cursor = fixed;
-	app_invalidate ();
+	xui_invalidate ();
 
 	app_ensure_selection_visible ();
 	return result;
@@ -1362,7 +1339,7 @@ app_jump_to_marks (ssize_t i)
 
 	g_ctx.view_cursor = g_ctx.marks_by_offset[i].offset;
 	g_ctx.view_skip_nibble = false;
-	app_invalidate ();
+	xui_invalidate ();
 	app_ensure_selection_visible ();
 	return true;
 }
@@ -1398,7 +1375,7 @@ app_process_action (enum action action)
 		g_ctx.view_cursor = g_ctx.data_offset;
 		g_ctx.view_skip_nibble = false;
 		app_ensure_selection_visible ();
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 	case ACTION_GOTO_BOTTOM:
 		if (!g_ctx.data_len)
@@ -1407,7 +1384,7 @@ app_process_action (enum action action)
 		g_ctx.view_cursor = g_ctx.data_offset + g_ctx.data_len - 1;
 		g_ctx.view_skip_nibble = false;
 		app_ensure_selection_visible ();
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 
 	case ACTION_GOTO_PAGE_PREVIOUS:
@@ -1434,7 +1411,7 @@ app_process_action (enum action action)
 			g_ctx.view_cursor--;
 			app_ensure_selection_visible ();
 		}
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 	case ACTION_RIGHT:
 		if (!g_ctx.view_skip_nibble)
@@ -1448,7 +1425,7 @@ app_process_action (enum action action)
 			g_ctx.view_cursor++;
 			app_ensure_selection_visible ();
 		}
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 
 	case ACTION_ROW_START:
@@ -1459,7 +1436,7 @@ app_process_action (enum action action)
 
 		g_ctx.view_cursor = new;
 		g_ctx.view_skip_nibble = false;
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 	}
 	case ACTION_ROW_END:
@@ -1470,7 +1447,7 @@ app_process_action (enum action action)
 
 		g_ctx.view_cursor = new;
 		g_ctx.view_skip_nibble = false;
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 	}
 
@@ -1491,13 +1468,13 @@ app_process_action (enum action action)
 		break;
 	case ACTION_REDRAW:
 		clear ();
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 
 	case ACTION_TOGGLE_ENDIANITY:
 		g_ctx.endianity = (g_ctx.endianity == ENDIANITY_LE)
 			? ENDIANITY_BE : ENDIANITY_LE;
-		app_invalidate ();
+		xui_invalidate ();
 		break;
 	default:
 		return false;
@@ -1508,59 +1485,76 @@ app_process_action (enum action action)
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 static bool
-app_process_left_mouse_click (int line, int column)
+app_process_left_mouse_click (struct widget *w, int x, int y)
 {
-	if (line < 0)
-		return false;
-
-	if (line == app_visible_rows ())
-	{
-		if (column <  COLS - 7
-		 || column >= COLS - 5)
-			return false;
+	if (w->id == WIDGET_ENDIANITY)
 		return app_process_action (ACTION_TOGGLE_ENDIANITY);
-	}
-	else if (line < app_visible_rows ())
+
+	// XXX: This is really ugly.
+	x = x / g_ctx.digitw - 2;
+	y = w->userdata;
+	switch (w->id)
 	{
-		// TODO: when holding a mouse button over a mark string,
-		//   go to a locked mode that highlights that entire mark
-		//   (probably by inverting colors)
-
-		// TODO: employ strict checking here before the autofix
-		int offset;
-		if (column >= 10 && column < 50)
-		{
-			offset = column - 10;
-			offset -= offset/5 + offset/21;
-			g_ctx.view_skip_nibble = offset % 2;
-			offset /= 2;
-		}
-		else if (column >= 52 && column < 68)
-		{
-			offset = column - 52;
-			g_ctx.view_skip_nibble = false;
-		}
-		else
-			return false;
-
-		g_ctx.view_cursor = g_ctx.view_top + line * ROW_SIZE + offset;
-		return app_move_cursor_by_rows (0);
+	case WIDGET_HEX:
+		x -= x/5 + x/21;
+		g_ctx.view_skip_nibble = x % 2;
+		x /= 2;
+		break;
+	case WIDGET_ASCII:
+		g_ctx.view_skip_nibble = false;
+		break;
+	default:
+		return true;
 	}
-	return true;
+
+	g_ctx.view_cursor = g_ctx.view_top + y * ROW_SIZE + x;
+	return app_move_cursor_by_rows (0);
+}
+
+/// Returns the deepest child at the cursor that has a non-zero ID, if any.
+static struct widget *
+app_find_widget (struct widget *list, int x, int y)
+{
+	struct widget *target = NULL;
+	LIST_FOR_EACH (struct widget, w, list)
+	{
+		if (x < w->x || x >= w->x + w->width
+		 || y < w->y || y >= w->y + w->height)
+			continue;
+
+		struct widget *child = app_find_widget (w->children, x, y);
+		if (child)
+			target = child;
+		else if (w->id)
+			target = w;
+	}
+	return target;
 }
 
 static bool
-app_process_mouse (termo_mouse_event_t type, int line, int column, int button)
+app_process_mouse (termo_mouse_event_t type, int x, int y, int button,
+	int modifiers)
 {
+	(void) modifiers;
+
+	// TODO: when holding a mouse button over a mark string,
+	//   go to a locked mode that highlights that entire mark
+	//   (probably by inverting colors)
 	if (type != TERMO_MOUSE_PRESS)
 		return true;
-
-	if (button == 1)
-		return app_process_left_mouse_click (line, column);
-	else if (button == 4)
+	if (button == 4)
 		return app_process_action (ACTION_SCROLL_UP);
-	else if (button == 5)
+	if (button == 5)
 		return app_process_action (ACTION_SCROLL_DOWN);
+
+	struct widget *target = app_find_widget (g_xui.widgets, x, y);
+	if (!target)
+		return false;
+
+	x -= target->x;
+	y -= target->y;
+	if (button == 1)
+		return app_process_left_mouse_click (target, x, y);
 	return false;
 }
 
@@ -1615,7 +1609,7 @@ g_default_bindings[] =
 static int
 app_binding_cmp (const void *a, const void *b)
 {
-	return termo_keycmp (g_ctx.tk,
+	return termo_keycmp (g_xui.tk,
 		&((struct binding *) a)->decoded, &((struct binding *) b)->decoded);
 }
 
@@ -1625,7 +1619,7 @@ app_init_bindings (void)
 	for (size_t i = 0; i < N_ELEMENTS (g_default_bindings); i++)
 	{
 		struct binding *binding = &g_default_bindings[i];
-		hard_assert (!*termo_strpkey_utf8 (g_ctx.tk,
+		hard_assert (!*termo_strpkey_utf8 (g_xui.tk,
 			binding->key, &binding->decoded, TERMO_FORMAT_ALTISMETA));
 	}
 	qsort (g_default_bindings, N_ELEMENTS (g_default_bindings),
@@ -1713,49 +1707,6 @@ signals_setup_handlers (void)
 // --- Initialisation, event handling ------------------------------------------
 
 static void
-app_on_tty_readable (const struct pollfd *fd, void *user_data)
-{
-	(void) user_data;
-	if (fd->revents & ~(POLLIN | POLLHUP | POLLERR))
-		print_debug ("fd %d: unexpected revents: %d", fd->fd, fd->revents);
-
-	poller_timer_reset (&g_ctx.tk_timer);
-	termo_advisereadable (g_ctx.tk);
-
-	termo_key_t event;
-	termo_result_t res;
-	while ((res = termo_getkey (g_ctx.tk, &event)) == TERMO_RES_KEY)
-	{
-		int y, x, button;
-		termo_mouse_event_t type;
-		bool success;
-		if (termo_interpret_mouse (g_ctx.tk, &event, &type, &button, &y, &x))
-			success = app_process_mouse (type, y, x, button);
-		else
-			success = app_process_termo_event (&event);
-
-		if (!success)
-			beep ();
-	}
-
-	if (res == TERMO_RES_AGAIN)
-		poller_timer_set (&g_ctx.tk_timer, termo_get_waittime (g_ctx.tk));
-	else if (res == TERMO_RES_ERROR || res == TERMO_RES_EOF)
-		app_quit ();
-}
-
-static void
-app_on_key_timer (void *user_data)
-{
-	(void) user_data;
-
-	termo_key_t event;
-	if (termo_getkey_force (g_ctx.tk, &event) == TERMO_RES_KEY)
-		if (!app_process_termo_event (&event))
-			app_quit ();
-}
-
-static void
 app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 {
 	(void) user_data;
@@ -1763,22 +1714,51 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 	char id = 0;
 	(void) read (fd->fd, &id, 1);
 
-	if (g_termination_requested && !g_ctx.quitting)
+	if (g_termination_requested)
 		app_quit ();
 
 	if (g_winch_received)
 	{
 		g_winch_received = false;
-		update_curses_terminal_size ();
+		if (g_xui.ui->winch)
+			g_xui.ui->winch ();
 		app_fix_view_range ();
-		app_invalidate ();
 	}
+}
+
+static void
+app_show_message (char *message)
+{
+	cstr_set (&g_ctx.message, message);
+	poller_timer_set (&g_ctx.message_timer, 5000);
+	xui_invalidate ();
+}
+
+static void
+app_hide_message (void)
+{
+	if (!g_ctx.message)
+		return;
+
+	cstr_set (&g_ctx.message, NULL);
+	poller_timer_reset (&g_ctx.message_timer);
+	xui_invalidate ();
+}
+
+static void
+app_on_message_timer (void *user_data)
+{
+	(void) user_data;
+
+	app_hide_message ();
 }
 
 static void
 app_log_handler (void *user_data, const char *quote, const char *fmt,
 	va_list ap)
 {
+	(void) user_data;
+
 	// We certainly don't want to end up in a possibly infinite recursion
 	static bool in_processing;
 	if (in_processing)
@@ -1790,19 +1770,22 @@ app_log_handler (void *user_data, const char *quote, const char *fmt,
 	str_append (&message, quote);
 	str_append_vprintf (&message, fmt, ap);
 
+	app_show_message (xstrdup (message.str));
+
 	// If the standard error output isn't redirected, try our best at showing
 	// the message to the user
-	if (!isatty (STDERR_FILENO))
+	if (g_debug_mode && !isatty (STDERR_FILENO))
 		fprintf (stderr, "%s\n", message.str);
-	else
-	{
-		cstr_set (&g_ctx.message, xstrdup (message.str));
-		g_ctx.message_attr = (intptr_t) user_data;
-		app_invalidate ();
-	}
 	str_free (&message);
 
 	in_processing = false;
+}
+
+static void
+app_on_clipboard_copy (const char *text)
+{
+	// TODO: Resolve encoding.
+	print_status ("Text copied to clipboard: %s", text);
 }
 
 static void
@@ -1812,15 +1795,8 @@ app_init_poller_events (void)
 	g_ctx.signal_event.dispatcher = app_on_signal_pipe_readable;
 	poller_fd_set (&g_ctx.signal_event, POLLIN);
 
-	g_ctx.tty_event = poller_fd_make (&g_ctx.poller, STDIN_FILENO);
-	g_ctx.tty_event.dispatcher = app_on_tty_readable;
-	poller_fd_set (&g_ctx.tty_event, POLLIN);
-
-	g_ctx.tk_timer = poller_timer_make (&g_ctx.poller);
-	g_ctx.tk_timer.dispatcher = app_on_key_timer;
-
-	g_ctx.refresh_event = poller_idle_make (&g_ctx.poller);
-	g_ctx.refresh_event.dispatcher = app_on_refresh;
+	g_ctx.message_timer = poller_timer_make (&g_ctx.poller);
+	g_ctx.message_timer.dispatcher = app_on_message_timer;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1860,17 +1836,21 @@ main (int argc, char *argv[])
 	static const struct opt opts[] =
 	{
 		{ 'd', "debug", NULL, 0, "run in debug mode" },
+#ifdef WITH_X11
+		{ 'x', "x11", NULL, 0, "use X11 even when run from a terminal" },
+#endif  // WITH_X11
 		{ 'h', "help", NULL, 0, "display this help and exit" },
 		{ 'V', "version", NULL, 0, "output version information and exit" },
 
 		{ 'o', "offset", "OFFSET", 0, "offset within the file" },
 		{ 's', "size", "SIZE", 0, "size limit (1G by default)" },
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 		{ 't', "type", "TYPE", 0, "force interpretation as the given type" },
-#endif // HAVE_LUA
+#endif // WITH_LUA
 		{ 0, NULL, NULL, 0, NULL }
 	};
 
+	bool requested_x11 = false;
 	struct opt_handler oh = opt_handler_make (argc, argv, opts, "[FILE]",
 		"Interpreting hex viewer.");
 	int64_t size_limit = 1 << 30;
@@ -1882,6 +1862,9 @@ main (int argc, char *argv[])
 	{
 	case 'd':
 		g_debug_mode = true;
+		break;
+	case 'x':
+		requested_x11 = true;
 		break;
 	case 'h':
 		opt_handler_usage (&oh, stdout);
@@ -1910,7 +1893,7 @@ main (int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 	// We do it at this questionable location to catch plugin failure before
 	// we read potentially hundreds of megabytes of data in
 	app_lua_init ();
@@ -1922,7 +1905,7 @@ main (int argc, char *argv[])
 			puts (iter.link->key);
 		exit (EXIT_SUCCESS);
 	}
-#endif // HAVE_LUA
+#endif // WITH_LUA
 
 	// When no filename is given, read from stdin and replace it with the tty
 	int input_fd;
@@ -1984,7 +1967,7 @@ main (int argc, char *argv[])
 		print_warning ("failed to set the locale");
 
 	app_init_context ();
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 	// TODO: eventually we should do this in a separate thread after load
 	//   as it may take a long time (-> responsivity) and once we allow the user
 	//   to edit the file, each change will need a background rescan
@@ -2003,15 +1986,22 @@ main (int argc, char *argv[])
 		exit_fatal ("Lua: decoding failed: %s", lua_tostring (g_ctx.L, -1));
 
 	lua_pop (g_ctx.L, 1);
-#endif // HAVE_LUA
+#endif // WITH_LUA
 	app_flatten_marks ();
 
 	app_load_configuration ();
-	app_init_terminal ();
 	signals_setup_handlers ();
 	app_init_poller_events ();
-	app_invalidate ();
+
+	xui_preinit ();
 	app_init_bindings ();
+	xui_start (&g_ctx.poller,
+		requested_x11, g_ctx.attrs, N_ELEMENTS (g_ctx.attrs));
+	xui_invalidate ();
+
+	struct widget *w = g_xui.ui->label (0, XUI_ATTR_MONOSPACE, "8");
+	g_ctx.digitw = w->width;
+	widget_destroy (w);
 
 	// Redirect all messages from liberty so that they don't disrupt display
 	g_log_message_real = app_log_handler;
@@ -2020,14 +2010,14 @@ main (int argc, char *argv[])
 	while (g_ctx.polling)
 		poller_run (&g_ctx.poller);
 
-	endwin ();
+	xui_stop ();
 	g_log_message_real = log_message_stdio;
 	app_free_context ();
 
-#ifdef HAVE_LUA
+#ifdef WITH_LUA
 	str_map_free (&g_ctx.coders);
 	lua_close (g_ctx.L);
-#endif // HAVE_LUA
+#endif // WITH_LUA
 
 	return 0;
 }

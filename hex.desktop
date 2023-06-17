@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=hex
+GenericName=Interpreting hex viewer
+Icon=hex
+Exec=hex %f
+NoDisplay=true
+StartupNotify=false
+Categories=Utility;

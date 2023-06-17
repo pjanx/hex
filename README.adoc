@@ -3,7 +3,7 @@ hex
 
 'hex' is yet another hex viewer.  It automatically interprets fields within
 files using a set of Lua scripts, colorizing them and showing descriptions on
-the side.
+the side.  It also runs equally well in the terminal, or as an X11 client.
 
 At the moment there aren't that many features and we only have a few decoders.
 
@@ -24,6 +24,7 @@ Building and Running
 Build dependencies: CMake, pkg-config, awk, liberty (included),
  termo (included), asciidoctor or asciidoc (recommended but optional) +
 Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting)
+Optional runtime dependencies: x11, xft
 
  $ git clone --recursive https://git.janouch.name/p/hex.git
  $ mkdir hex/build

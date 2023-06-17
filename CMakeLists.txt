@@ -20,7 +20,6 @@ include (AddThreads)
 find_package (Termo QUIET NO_MODULE)
 option (USE_SYSTEM_TERMO
 	"Don't compile our own termo library, use the system one" ${Termo_FOUND})
-
 if (USE_SYSTEM_TERMO)
 	if (NOT Termo_FOUND)
 		message (FATAL_ERROR "System termo library not found")
@@ -45,7 +44,6 @@ set (project_libraries ${Unistring_LIBRARIES}
 
 pkg_search_module (lua lua53 lua5.3 lua-5.3 lua>=5.3)
 option (WITH_LUA "Enable support for Lua plugins" ${lua_FOUND})
-
 if (WITH_LUA)
 	if (NOT lua_FOUND)
 		message (FATAL_ERROR "Lua library not found")
@@ -65,6 +63,18 @@ if (WITH_LUA)
 	endif ()
 endif ()
 
+pkg_check_modules (x11 x11 xrender xft fontconfig)
+option (WITH_X11 "Build with X11 support" ${x11_FOUND})
+if (WITH_X11)
+	if (NOT x11_FOUND)
+		message (FATAL_ERROR "Some X11 libraries were not found")
+	endif ()
+
+	list (APPEND project_libraries ${x11_LIBRARIES})
+	include_directories (${x11_INCLUDE_DIRS})
+	link_directories (${x11_LIBRARY_DIRS})
+endif ()
+
 include_directories (${Unistring_INCLUDE_DIRS}
 	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
 
@@ -74,8 +84,6 @@ set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
 
 # Generate a configuration file
-set (HAVE_LUA "${WITH_LUA}")
-
 configure_file (${PROJECT_SOURCE_DIR}/config.h.in
 	${PROJECT_BINARY_DIR}/config.h)
 include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
@@ -89,6 +97,10 @@ add_threads (${PROJECT_NAME})
 include (GNUInstallDirs)
 install (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
+if (WITH_X11)
+	install (FILES ${PROJECT_NAME}.desktop
+		DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+endif ()
 
 # Generate documentation from text markup
 find_program (ASCIIDOCTOR_EXECUTABLE asciidoctor)

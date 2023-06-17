@@ -5,7 +5,8 @@
 #define PROGRAM_VERSION "${PROJECT_VERSION}"
 
 #cmakedefine HAVE_RESIZETERM
-#cmakedefine HAVE_LUA
+#cmakedefine WITH_LUA
+#cmakedefine WITH_X11
 
 #endif  // ! CONFIG_H
 
