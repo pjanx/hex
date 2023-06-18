@@ -63,7 +63,7 @@ local decode_ph = function (elf, c)
 	ph.vaddr = elf.uwide (c, "virtual address: %#x")
 	ph.paddr = elf.uwide (c, "physical address: %#x")
 	ph.filesz = elf.uwide (c, "size in file: %d")
-	ph.memsz = elf.uwide (c, "sise in memory: %d")
+	ph.memsz = elf.uwide (c, "size in memory: %d")
 	if elf.class == 1 then ph.flags = c:u32 ("flags: %s", xform_ph_flags) end
 	ph.align = elf.uwide (c, "alignment: %d")
 	return ph
