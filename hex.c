@@ -157,10 +157,10 @@ static struct app_context
 
 	struct attrs attrs[ATTRIBUTE_COUNT];
 }
-g_ctx;
+g;
 
 /// Shortcut to retrieve named terminal attributes
-#define APP_ATTR(name) g_ctx.attrs[ATTRIBUTE_ ## name].attrs
+#define APP_ATTR(name) g.attrs[ATTRIBUTE_ ## name].attrs
 
 // --- Configuration -----------------------------------------------------------
 
@@ -197,7 +197,7 @@ load_config_colors (struct config_item *subtree, void *user_data)
 	const char *value;
 #define XX(name, config, fg_, bg_, attrs_) \
 	if ((value = get_config_string (subtree, config))) \
-		g_ctx.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
+		g.attrs[ATTRIBUTE_ ## name] = attrs_decode (value);
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -205,7 +205,7 @@ load_config_colors (struct config_item *subtree, void *user_data)
 static void
 app_load_configuration (void)
 {
-	struct config *config = &g_ctx.config;
+	struct config *config = &g.config;
 	config_register_module (config, "colors", load_config_colors, NULL);
 
 	// Bootstrap configuration, so that we can access schema items at all
@@ -228,8 +228,8 @@ app_load_configuration (void)
 	}
 	if (root)
 	{
-		config_load (&g_ctx.config, root);
-		config_schema_call_changed (g_ctx.config.root);
+		config_load (&g.config, root);
+		config_schema_call_changed (g.config.root);
 	}
 }
 
@@ -239,9 +239,9 @@ static void
 app_init_attributes (void)
 {
 #define XX(name, config, fg_, bg_, attrs_)          \
-	g_ctx.attrs[ATTRIBUTE_ ## name].fg    = fg_;    \
-	g_ctx.attrs[ATTRIBUTE_ ## name].bg    = bg_;    \
-	g_ctx.attrs[ATTRIBUTE_ ## name].attrs = attrs_;
+	g.attrs[ATTRIBUTE_ ## name].fg    = fg_;    \
+	g.attrs[ATTRIBUTE_ ## name].bg    = bg_;    \
+	g.attrs[ATTRIBUTE_ ## name].attrs = attrs_;
 	ATTRIBUTE_TABLE (XX)
 #undef XX
 }
@@ -256,13 +256,13 @@ app_on_insufficient_color (void)
 static void
 app_init_context (void)
 {
-	poller_init (&g_ctx.poller);
-	g_ctx.config = config_make ();
+	poller_init (&g.poller);
+	g.config = config_make ();
 
-	ARRAY_INIT (g_ctx.marks);
-	g_ctx.mark_strings = str_make ();
-	ARRAY_INIT (g_ctx.marks_by_offset);
-	ARRAY_INIT (g_ctx.offset_entries);
+	ARRAY_INIT (g.marks);
+	g.mark_strings = str_make ();
+	ARRAY_INIT (g.marks_by_offset);
+	ARRAY_INIT (g.offset_entries);
 
 	app_init_attributes ();
 }
@@ -270,24 +270,24 @@ app_init_context (void)
 static void
 app_free_context (void)
 {
-	config_free (&g_ctx.config);
-	poller_free (&g_ctx.poller);
+	config_free (&g.config);
+	poller_free (&g.poller);
 
-	free (g_ctx.marks);
-	str_free (&g_ctx.mark_strings);
-	free (g_ctx.marks_by_offset);
-	free (g_ctx.offset_entries);
+	free (g.marks);
+	str_free (&g.mark_strings);
+	free (g.marks_by_offset);
+	free (g.offset_entries);
 
-	cstr_set (&g_ctx.message, NULL);
+	cstr_set (&g.message, NULL);
 
-	cstr_set (&g_ctx.filename, NULL);
-	free (g_ctx.data);
+	cstr_set (&g.filename, NULL);
+	free (g.data);
 }
 
 static void
 app_quit (void)
 {
-	g_ctx.polling = false;
+	g.polling = false;
 }
 
 // --- Field marking -----------------------------------------------------------
@@ -296,11 +296,11 @@ app_quit (void)
 static ssize_t
 app_find_marks (int64_t offset)
 {
-	ssize_t min = 0, end = g_ctx.marks_by_offset_len;
+	ssize_t min = 0, end = g.marks_by_offset_len;
 	while (min < end)
 	{
 		ssize_t mid = min + (end - min) / 2;
-		if (offset >= g_ctx.marks_by_offset[mid].offset)
+		if (offset >= g.marks_by_offset[mid].offset)
 			min = mid + 1;
 		else
 			end = mid;
@@ -312,10 +312,10 @@ static struct marks_by_offset *
 app_marks_at_offset (int64_t offset)
 {
 	ssize_t i = app_find_marks (offset);
-	if (i < 0 || (size_t) i >= g_ctx.marks_by_offset_len)
+	if (i < 0 || (size_t) i >= g.marks_by_offset_len)
 		return NULL;
 
-	struct marks_by_offset *marks = &g_ctx.marks_by_offset[i];
+	struct marks_by_offset *marks = &g.marks_by_offset[i];
 	if (marks->offset > offset)
 		return NULL;
 	return marks;
@@ -336,11 +336,11 @@ app_mark_cmp (const void *first, const void *second)
 static size_t
 app_store_marks (struct mark **entries, size_t len)
 {
-	size_t result = g_ctx.offset_entries_len;
-	ARRAY_RESERVE (g_ctx.offset_entries, len);
-	memcpy (g_ctx.offset_entries + g_ctx.offset_entries_len, entries,
+	size_t result = g.offset_entries_len;
+	ARRAY_RESERVE (g.offset_entries, len);
+	memcpy (g.offset_entries + g.offset_entries_len, entries,
 		sizeof *entries * len);
-	g_ctx.offset_entries_len += len;
+	g.offset_entries_len += len;
 	return result;
 }
 
@@ -356,8 +356,8 @@ app_store_marks (struct mark **entries, size_t len)
 static void
 app_flatten_marks (void)
 {
-	qsort (g_ctx.marks, g_ctx.marks_len, sizeof *g_ctx.marks, app_mark_cmp);
-	if (!g_ctx.marks_len)
+	qsort (g.marks, g.marks_len, sizeof *g.marks, app_mark_cmp);
+	if (!g.marks_len)
 		return;
 
 	ARRAY (struct mark *, current)
@@ -365,14 +365,14 @@ app_flatten_marks (void)
 	int current_color = 0;
 
 	// Make offset zero actually point to an empty entry
-	g_ctx.offset_entries[g_ctx.offset_entries_len++] = NULL;
+	g.offset_entries[g.offset_entries_len++] = NULL;
 
-	struct mark *next = g_ctx.marks;
-	struct mark *end = next + g_ctx.marks_len;
+	struct mark *next = g.marks;
+	struct mark *end = next + g.marks_len;
 	while (current_len || next < end)
 	{
 		// Find the closest offset at which marks change
-		int64_t closest = g_ctx.data_offset + g_ctx.data_len;
+		int64_t closest = g.data_offset + g.data_len;
 		if (next < end)
 			closest = next->offset;
 		for (size_t i = 0; i < current_len; i++)
@@ -405,8 +405,8 @@ app_flatten_marks (void)
 			current_color %= 4;
 		}
 
-		ARRAY_RESERVE (g_ctx.marks_by_offset, 1);
-		g_ctx.marks_by_offset[g_ctx.marks_by_offset_len++] =
+		ARRAY_RESERVE (g.marks_by_offset, 1);
+		g.marks_by_offset[g.marks_by_offset_len++] =
 			(struct marks_by_offset) { closest, marks, color };
 	}
 	free (current);
@@ -441,7 +441,7 @@ static struct widget *
 app_mono_padding (chtype attrs, float width, float height)
 {
 	struct widget *w = g_xui.ui->padding (attrs, width, height);
-	w->width = width * g_ctx.digitw;
+	w->width = width * g.digitw;
 	return w;
 }
 
@@ -484,23 +484,23 @@ app_layout_cell (struct layout *hex, struct layout *ascii, int attrs,
 	struct marks_by_offset *marks = app_marks_at_offset (addr);
 	int attrs_mark = attrs;
 	if (marks && marks->color >= 0)
-		attrs_mark = g_ctx.attrs[marks->color].attrs;
+		attrs_mark = g.attrs[marks->color].attrs;
 
-	if (addr >= g_ctx.view_cursor
-	 && addr <  g_ctx.view_cursor + 8)
+	if (addr >= g.view_cursor
+	 && addr <  g.view_cursor + 8)
 	{
 		attrs      |= A_UNDERLINE;
 		attrs_mark |= A_UNDERLINE;
 	}
 
 	// TODO: leave it up to the user to decide what should be colored
-	uint8_t cell = g_ctx.data[addr - g_ctx.data_offset];
-	if (addr != g_ctx.view_cursor)
+	uint8_t cell = g.data[addr - g.data_offset];
+	if (addr != g.view_cursor)
 	{
 		char s[] = { hexa[cell >> 4], hexa[cell & 0xf], 0 };
 		app_push (hex, app_mono_label (attrs, s));
 	}
-	else if (g_ctx.view_skip_nibble)
+	else if (g.view_skip_nibble)
 	{
 		char s1[] = { hexa[cell >> 4], 0 }, s2[] = { hexa[cell & 0xf], 0 };
 		app_push (hex, app_mono_label (attrs, s1));
@@ -530,14 +530,14 @@ app_layout_row (int64_t addr, int y, int attrs)
 	struct layout ascii = {};
 	app_push (&ascii, app_mono_padding (attrs, 2, 1));
 
-	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	int64_t end_addr = g.data_offset + g.data_len;
 	for (int x = 0; x < ROW_SIZE; x++)
 	{
 		if (x % 8 == 0) app_push (&hex, app_mono_padding (attrs, 1, 1));
 		if (x % 2 == 0) app_push (&hex, app_mono_padding (attrs, 1, 1));
 
 		int64_t cell_addr = addr + x;
-		if (cell_addr < g_ctx.data_offset
+		if (cell_addr < g.data_offset
 		 || cell_addr >= end_addr)
 		{
 			app_push (&hex,   app_mono_padding (attrs, 2, 1));
@@ -559,10 +559,10 @@ static struct widget *
 app_layout_view (void)
 {
 	struct layout l = {};
-	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
+	int64_t end_addr = g.data_offset + g.data_len;
 	for (int y = 0; y <= app_visible_rows (); y++)
 	{
-		int64_t addr = g_ctx.view_top + y * ROW_SIZE;
+		int64_t addr = g.view_top + y * ROW_SIZE;
 		if (addr >= end_addr)
 			break;
 
@@ -579,10 +579,10 @@ app_layout_info (void)
 {
 	const struct marks_by_offset *marks;
 	struct layout l = {};
-	if (!(marks = app_marks_at_offset (g_ctx.view_cursor)))
+	if (!(marks = app_marks_at_offset (g.view_cursor)))
 		goto out;
 
-	struct mark *mark, **iter = g_ctx.offset_entries + marks->marks;
+	struct mark *mark, **iter = g.offset_entries + marks->marks;
 	for (int y = 0; y <= app_visible_rows (); y++)
 	{
 		// TODO: we can use the field background
@@ -590,7 +590,7 @@ app_layout_info (void)
 		if (!(mark = *iter++))
 			break;
 
-		const char *description = g_ctx.mark_strings.str + mark->description;
+		const char *description = g.mark_strings.str + mark->description;
 		app_push (&l, app_label (0, description));
 	}
 out:
@@ -622,9 +622,9 @@ app_footer_field (char id, int size, const char *fmt, ...)
 	const char *coding = "";
 	if (size <= 1)
 		;
-	else if (g_ctx.endianity == ENDIANITY_LE)
+	else if (g.endianity == ENDIANITY_LE)
 		coding = "le";
-	else if (g_ctx.endianity == ENDIANITY_BE)
+	else if (g.endianity == ENDIANITY_BE)
 		coding = "be";
 
 	struct layout l = {};
@@ -655,7 +655,7 @@ app_footer_group (struct layout *out, int size, int64_t u, int64_t s, int align)
 	app_push (&l, app_footer_field ('u', size, "%" PRIu64, u));
 	app_push (&l, app_footer_field ('s', size, "%" PRId64, s));
 	l.head->width = MAX (l.head->width,
-		g_ctx.digitw * align /* sign + ceil(log10(U/INT*_MAX)) */);
+		g.digitw * align /* sign + ceil(log10(U/INT*_MAX)) */);
 	if (out->head)
 		app_push (out, app_mono_padding (APP_ATTR (FOOTER), 2, 1));
 	app_push (out, xui_vbox (l.head));
@@ -668,11 +668,11 @@ app_layout_footer (void)
 	app_push (&statusl, app_label (APP_ATTR (BAR), APP_TITLE));
 	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
-	if (g_ctx.message)
-		app_push (&statusl, app_label (APP_ATTR (BAR_HL), g_ctx.message));
-	else if (g_ctx.filename)
+	if (g.message)
+		app_push (&statusl, app_label (APP_ATTR (BAR_HL), g.message));
+	else if (g.filename)
 	{
-		char *filename = (char *) u8_strconv_from_locale (g_ctx.filename);
+		char *filename = (char *) u8_strconv_from_locale (g.filename);
 		app_push (&statusl, app_label (APP_ATTR (BAR_HL), filename));
 		free (filename);
 		app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
@@ -680,46 +680,46 @@ app_layout_footer (void)
 
 	app_push_hfill (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
-	char *address = xstrdup_printf ("%08" PRIx64, g_ctx.view_cursor);
+	char *address = xstrdup_printf ("%08" PRIx64, g.view_cursor);
 	app_push (&statusl, app_mono_label (APP_ATTR (BAR), address));
 	free (address);
 	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
 	app_push (&statusl, app_mono_label (APP_ATTR (BAR),
-		g_ctx.endianity == ENDIANITY_LE ? "LE" : "BE"))->id = WIDGET_ENDIANITY;
+		g.endianity == ENDIANITY_LE ? "LE" : "BE"))->id = WIDGET_ENDIANITY;
 	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
-	int64_t top = g_ctx.view_top;
-	int64_t bot = g_ctx.view_top + app_visible_rows () * ROW_SIZE;
+	int64_t top = g.view_top;
+	int64_t bot = g.view_top + app_visible_rows () * ROW_SIZE;
 	struct str where = str_make ();
-	if (top <= g_ctx.data_offset
-	 && bot >= g_ctx.data_offset + g_ctx.data_len)
+	if (top <= g.data_offset
+	 && bot >= g.data_offset + g.data_len)
 		str_append (&where, "All");
-	else if (top <= g_ctx.data_offset)
+	else if (top <= g.data_offset)
 		str_append (&where, "Top");
-	else if (bot >= g_ctx.data_offset + g_ctx.data_len)
+	else if (bot >= g.data_offset + g.data_len)
 		str_append (&where, "Bot");
 	else
 	{
-		int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
-		int64_t cur = g_ctx.view_top / ROW_SIZE;
+		int64_t end_addr = g.data_offset + g.data_len;
+		int64_t cur = g.view_top / ROW_SIZE;
 		int64_t max = (end_addr - 1) / ROW_SIZE - app_visible_rows () + 1;
 
-		cur -= g_ctx.data_offset / ROW_SIZE;
-		max -= g_ctx.data_offset / ROW_SIZE;
+		cur -= g.data_offset / ROW_SIZE;
+		max -= g.data_offset / ROW_SIZE;
 		str_append_printf (&where, "%2d%%", (int) (100 * cur / max));
 	}
 
 	app_push (&statusl, app_mono_label (APP_ATTR (BAR), where.str));
 	str_free (&where);
 
-	int64_t end_addr = g_ctx.data_offset + g_ctx.data_len;
-	if (g_ctx.view_cursor < g_ctx.data_offset
-	 || g_ctx.view_cursor >= end_addr)
+	int64_t end_addr = g.data_offset + g.data_len;
+	if (g.view_cursor < g.data_offset
+	 || g.view_cursor >= end_addr)
 		return xui_hbox (statusl.head);
 
-	int64_t len = end_addr - g_ctx.view_cursor;
-	uint8_t *p = g_ctx.data + (g_ctx.view_cursor - g_ctx.data_offset);
+	int64_t len = end_addr - g.view_cursor;
+	uint8_t *p = g.data + (g.view_cursor - g.data_offset);
 
 	// TODO: The entire bottom part perhaps should be pre-painted
 	//   with APP_ATTR (FOOTER).
@@ -728,17 +728,17 @@ app_layout_footer (void)
 		app_footer_group (&groupl, 1, p[0], (int8_t) p[0], 3 + 4);
 	if (len >= 2)
 	{
-		uint16_t value = app_decode (p, 2, g_ctx.endianity);
+		uint16_t value = app_decode (p, 2, g.endianity);
 		app_footer_group (&groupl, 2, value, (int16_t) value, 6 + 6);
 	}
 	if (len >= 4)
 	{
-		uint32_t value = app_decode (p, 4, g_ctx.endianity);
+		uint32_t value = app_decode (p, 4, g.endianity);
 		app_footer_group (&groupl, 4, value, (int32_t) value, 6 + 11);
 	}
 	if (len >= 8)
 	{
-		uint64_t value = app_decode (p, 8, g_ctx.endianity);
+		uint64_t value = app_decode (p, 8, g.endianity);
 		app_footer_group (&groupl, 8, value, (int64_t) value, 6 + 20);
 	}
 
@@ -828,8 +828,8 @@ static void
 app_lua_coder_free (void *coder)
 {
 	struct app_lua_coder *self = coder;
-	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_decode);
-	luaL_unref (g_ctx.L, LUA_REGISTRYINDEX, self->ref_detect);
+	luaL_unref (g.L, LUA_REGISTRYINDEX, self->ref_decode);
+	luaL_unref (g.L, LUA_REGISTRYINDEX, self->ref_detect);
 	free (self);
 }
 
@@ -840,7 +840,7 @@ app_lua_register (lua_State *L)
 
 	(void) app_lua_getfield (L, 1, "type",   LUA_TSTRING,   false);
 	const char *type = lua_tostring (L, -1);
-	if (str_map_find (&g_ctx.coders, type))
+	if (str_map_find (&g.coders, type))
 		luaL_error (L, "a coder has already been registered for `%s'", type);
 
 	(void) app_lua_getfield (L, 1, "detect", LUA_TFUNCTION, true);
@@ -849,7 +849,7 @@ app_lua_register (lua_State *L)
 	struct app_lua_coder *coder = xcalloc (1, sizeof *coder);
 	coder->ref_decode = luaL_ref (L, LUA_REGISTRYINDEX);
 	coder->ref_detect = luaL_ref (L, LUA_REGISTRYINDEX);
-	str_map_set (&g_ctx.coders, type, coder);
+	str_map_set (&g.coders, type, coder);
 	return 0;
 }
 
@@ -973,12 +973,12 @@ app_lua_mark (int64_t offset, int64_t len, const char *desc)
 	if (len <= 0)
 		return;
 
-	ARRAY_RESERVE (g_ctx.marks, 1);
-	g_ctx.marks[g_ctx.marks_len++] =
-		(struct mark) { offset, len, g_ctx.mark_strings.len };
+	ARRAY_RESERVE (g.marks, 1);
+	g.marks[g.marks_len++] =
+		(struct mark) { offset, len, g.mark_strings.len };
 
-	str_append (&g_ctx.mark_strings, desc);
-	str_append_c (&g_ctx.mark_strings, 0);
+	str_append (&g.mark_strings, desc);
+	str_append_c (&g.mark_strings, 0);
 }
 
 static int
@@ -986,7 +986,7 @@ app_lua_chunk_mark (lua_State *L)
 {
 	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
 	int n_args = lua_gettop (L);
-	lua_rawgeti (L, LUA_REGISTRYINDEX, g_ctx.ref_format);
+	lua_rawgeti (L, LUA_REGISTRYINDEX, g.ref_format);
 	lua_insert (L, 2);
 	lua_call (L, n_args - 1, 1);
 	app_lua_mark (self->offset, self->len, luaL_checkstring (L, -1));
@@ -999,7 +999,7 @@ app_lua_chunk_identify (lua_State *L)
 {
 	(void) luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
 
-	struct str_map_iter iter = str_map_iter_make (&g_ctx.coders);
+	struct str_map_iter iter = str_map_iter_make (&g.coders);
 	struct app_lua_coder *coder;
 	while ((coder = str_map_iter_next (&iter)))
 	{
@@ -1045,7 +1045,7 @@ app_lua_chunk_decode (lua_State *L)
 	// While we could call "detect" here, just to be sure, some kinds may not
 	// even be detectable and it's better to leave it up to the plugin
 
-	struct app_lua_coder *coder = str_map_find (&g_ctx.coders, type);
+	struct app_lua_coder *coder = str_map_find (&g.coders, type);
 	if (!coder)
 		return luaL_error (L, "unknown type: %s", type);
 
@@ -1067,10 +1067,10 @@ app_lua_chunk_read (lua_State *L)
 
 	int64_t start = self->offset + self->position;
 	// XXX: or just return a shorter string in this case?
-	if (start + len > g_ctx.data_offset + g_ctx.data_len)
+	if (start + len > g.data_offset + g.data_len)
 		return luaL_argerror (L, 2, "chunk is too short");
 
-	lua_pushlstring (L, (char *) g_ctx.data + (start - g_ctx.data_offset), len);
+	lua_pushlstring (L, (char *) g.data + (start - g.data_offset), len);
 	self->position += len;
 	return 1;
 }
@@ -1092,7 +1092,7 @@ app_lua_chunk_finish_read
 	}
 
 	// Prepare <string.format>, <format>, <value>
-	lua_rawgeti (L, LUA_REGISTRYINDEX, g_ctx.ref_format);
+	lua_rawgeti (L, LUA_REGISTRYINDEX, g.ref_format);
 	lua_pushvalue (L, 2);
 
 	int pre_filter_top = lua_gettop (L);
@@ -1129,7 +1129,7 @@ static int
 app_lua_chunk_cstring (lua_State *L)
 {
 	struct app_lua_chunk *self = luaL_checkudata (L, 1, XLUA_CHUNK_METATABLE);
-	void *s = g_ctx.data + (self->offset - g_ctx.data_offset) + self->position;
+	void *s = g.data + (self->offset - g.data_offset) + self->position;
 
 	void *nil;
 	if (!(nil = memchr (s, '\0', self->len - self->position)))
@@ -1147,7 +1147,7 @@ app_lua_chunk_decode_int (lua_State *L, struct app_lua_chunk *self, size_t len)
 	if (self->position + (int64_t) len > self->len)
 		return luaL_error (L, "unexpected EOF");
 
-	void *s = g_ctx.data + (self->offset - g_ctx.data_offset) + self->position;
+	void *s = g.data + (self->offset - g.data_offset) + self->position;
 	return app_decode (s, len, self->endianity);
 }
 
@@ -1213,11 +1213,11 @@ app_lua_load_plugins (const char *plugin_dir)
 			continue;
 
 		char *path = xstrdup_printf ("%s/%s", plugin_dir, iter->d_name);
-		lua_pushcfunction (g_ctx.L, app_lua_error_handler);
-		if (luaL_loadfile (g_ctx.L, path)
-		 || lua_pcall (g_ctx.L, 0, 0, -2))
-			exit_fatal ("Lua: %s", lua_tostring (g_ctx.L, -1));
-		lua_pop (g_ctx.L, 1);
+		lua_pushcfunction (g.L, app_lua_error_handler);
+		if (luaL_loadfile (g.L, path)
+		 || lua_pcall (g.L, 0, 0, -2))
+			exit_fatal ("Lua: %s", lua_tostring (g.L, -1));
+		lua_pop (g.L, 1);
 		free (path);
 	}
 	if (errno)
@@ -1228,26 +1228,26 @@ app_lua_load_plugins (const char *plugin_dir)
 static void
 app_lua_init (void)
 {
-	if (!(g_ctx.L = lua_newstate (app_lua_alloc, NULL)))
+	if (!(g.L = lua_newstate (app_lua_alloc, NULL)))
 		exit_fatal ("Lua initialization failed");
 
-	g_ctx.coders = str_map_make (app_lua_coder_free);
+	g.coders = str_map_make (app_lua_coder_free);
 
-	lua_atpanic (g_ctx.L, app_lua_panic);
-	luaL_openlibs (g_ctx.L);
-	luaL_checkversion (g_ctx.L);
+	lua_atpanic (g.L, app_lua_panic);
+	luaL_openlibs (g.L);
+	luaL_checkversion (g.L);
 
 	// I don't want to reimplement this and the C function is not exported
-	hard_assert (lua_getglobal (g_ctx.L, LUA_STRLIBNAME));
-	hard_assert (lua_getfield (g_ctx.L, -1, "format"));
-	g_ctx.ref_format = luaL_ref (g_ctx.L, LUA_REGISTRYINDEX);
+	hard_assert (lua_getglobal (g.L, LUA_STRLIBNAME));
+	hard_assert (lua_getfield (g.L, -1, "format"));
+	g.ref_format = luaL_ref (g.L, LUA_REGISTRYINDEX);
 
-	luaL_newlib (g_ctx.L, app_lua_library);
-	lua_setglobal (g_ctx.L, PROGRAM_NAME);
+	luaL_newlib (g.L, app_lua_library);
+	lua_setglobal (g.L, PROGRAM_NAME);
 
-	luaL_newmetatable (g_ctx.L, XLUA_CHUNK_METATABLE);
-	luaL_setfuncs (g_ctx.L, app_lua_chunk_table, 0);
-	lua_pop (g_ctx.L, 1);
+	luaL_newmetatable (g.L, XLUA_CHUNK_METATABLE);
+	luaL_setfuncs (g.L, app_lua_chunk_table, 0);
+	lua_pop (g.L, 1);
 
 	struct strv v = strv_make ();
 	get_xdg_data_dirs (&v);
@@ -1269,24 +1269,24 @@ app_lua_init (void)
 static bool
 app_fix_view_range (void)
 {
-	int64_t data_view_start = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
-	if (g_ctx.view_top < data_view_start)
+	int64_t data_view_start = g.data_offset / ROW_SIZE * ROW_SIZE;
+	if (g.view_top < data_view_start)
 	{
-		g_ctx.view_top = data_view_start;
+		g.view_top = data_view_start;
 		xui_invalidate ();
 		return false;
 	}
 
 	// If the contents are at least as long as the screen, always fill it
-	int64_t last_byte = g_ctx.data_offset + g_ctx.data_len - 1;
+	int64_t last_byte = g.data_offset + g.data_len - 1;
 	int64_t max_view_top =
 		(last_byte / ROW_SIZE - app_visible_rows () + 1) * ROW_SIZE;
 	// But don't let that suggest a negative offset
 	max_view_top = MAX (max_view_top, 0);
 
-	if (g_ctx.view_top > max_view_top)
+	if (g.view_top > max_view_top)
 	{
-		g_ctx.view_top = max_view_top;
+		g.view_top = max_view_top;
 		xui_invalidate ();
 		return false;
 	}
@@ -1297,7 +1297,7 @@ app_fix_view_range (void)
 static bool
 app_scroll (int n)
 {
-	g_ctx.view_top += n * ROW_SIZE;
+	g.view_top += n * ROW_SIZE;
 	xui_invalidate ();
 	return app_fix_view_range ();
 }
@@ -1305,11 +1305,11 @@ app_scroll (int n)
 static void
 app_ensure_selection_visible (void)
 {
-	int too_high = g_ctx.view_top / ROW_SIZE - g_ctx.view_cursor / ROW_SIZE;
+	int too_high = g.view_top / ROW_SIZE - g.view_cursor / ROW_SIZE;
 	if (too_high > 0)
 		app_scroll (-too_high);
 
-	int too_low = g_ctx.view_cursor / ROW_SIZE - g_ctx.view_top / ROW_SIZE
+	int too_low = g.view_cursor / ROW_SIZE - g.view_top / ROW_SIZE
 		- app_visible_rows () + 1;
 	if (too_low > 0)
 		app_scroll (too_low);
@@ -1319,12 +1319,12 @@ static bool
 app_move_cursor_by_rows (int diff)
 {
 	// TODO: disallow partial up/down movement
-	int64_t fixed = g_ctx.view_cursor += diff * ROW_SIZE;
-	fixed = MAX (fixed, g_ctx.data_offset);
-	fixed = MIN (fixed, g_ctx.data_offset + g_ctx.data_len - 1);
+	int64_t fixed = g.view_cursor += diff * ROW_SIZE;
+	fixed = MAX (fixed, g.data_offset);
+	fixed = MIN (fixed, g.data_offset + g.data_len - 1);
 
-	bool result = g_ctx.view_cursor == fixed;
-	g_ctx.view_cursor = fixed;
+	bool result = g.view_cursor == fixed;
+	g.view_cursor = fixed;
 	xui_invalidate ();
 
 	app_ensure_selection_visible ();
@@ -1334,11 +1334,11 @@ app_move_cursor_by_rows (int diff)
 static bool
 app_jump_to_marks (ssize_t i)
 {
-	if (i < 0 || (size_t) i >= g_ctx.marks_by_offset_len)
+	if (i < 0 || (size_t) i >= g.marks_by_offset_len)
 		return false;
 
-	g_ctx.view_cursor = g_ctx.marks_by_offset[i].offset;
-	g_ctx.view_skip_nibble = false;
+	g.view_cursor = g.marks_by_offset[i].offset;
+	g.view_skip_nibble = false;
 	xui_invalidate ();
 	app_ensure_selection_visible ();
 	return true;
@@ -1372,17 +1372,17 @@ app_process_action (enum action action)
 	case ACTION_SCROLL_DOWN: app_scroll  (1); break;
 
 	case ACTION_GOTO_TOP:
-		g_ctx.view_cursor = g_ctx.data_offset;
-		g_ctx.view_skip_nibble = false;
+		g.view_cursor = g.data_offset;
+		g.view_skip_nibble = false;
 		app_ensure_selection_visible ();
 		xui_invalidate ();
 		break;
 	case ACTION_GOTO_BOTTOM:
-		if (!g_ctx.data_len)
+		if (!g.data_len)
 			return false;
 
-		g_ctx.view_cursor = g_ctx.data_offset + g_ctx.data_len - 1;
-		g_ctx.view_skip_nibble = false;
+		g.view_cursor = g.data_offset + g.data_len - 1;
+		g.view_skip_nibble = false;
 		app_ensure_selection_visible ();
 		xui_invalidate ();
 		break;
@@ -1400,29 +1400,29 @@ app_process_action (enum action action)
 	case ACTION_DOWN: app_move_cursor_by_rows  (1); break;
 
 	case ACTION_LEFT:
-		if (g_ctx.view_skip_nibble)
-			g_ctx.view_skip_nibble = false;
+		if (g.view_skip_nibble)
+			g.view_skip_nibble = false;
 		else
 		{
-			if (g_ctx.view_cursor <= g_ctx.data_offset)
+			if (g.view_cursor <= g.data_offset)
 				return false;
 
-			g_ctx.view_skip_nibble = true;
-			g_ctx.view_cursor--;
+			g.view_skip_nibble = true;
+			g.view_cursor--;
 			app_ensure_selection_visible ();
 		}
 		xui_invalidate ();
 		break;
 	case ACTION_RIGHT:
-		if (!g_ctx.view_skip_nibble)
-			g_ctx.view_skip_nibble = true;
+		if (!g.view_skip_nibble)
+			g.view_skip_nibble = true;
 		else
 		{
-			if (g_ctx.view_cursor >= g_ctx.data_offset + g_ctx.data_len - 1)
+			if (g.view_cursor >= g.data_offset + g.data_len - 1)
 				return false;
 
-			g_ctx.view_skip_nibble = false;
-			g_ctx.view_cursor++;
+			g.view_skip_nibble = false;
+			g.view_cursor++;
 			app_ensure_selection_visible ();
 		}
 		xui_invalidate ();
@@ -1430,37 +1430,37 @@ app_process_action (enum action action)
 
 	case ACTION_ROW_START:
 	{
-		int64_t new =  g_ctx.view_cursor / ROW_SIZE      * ROW_SIZE;
-		new = MAX (new, g_ctx.data_offset);
-		new = MIN (new, g_ctx.data_offset + g_ctx.data_len - 1);
+		int64_t new =  g.view_cursor / ROW_SIZE      * ROW_SIZE;
+		new = MAX (new, g.data_offset);
+		new = MIN (new, g.data_offset + g.data_len - 1);
 
-		g_ctx.view_cursor = new;
-		g_ctx.view_skip_nibble = false;
+		g.view_cursor = new;
+		g.view_skip_nibble = false;
 		xui_invalidate ();
 		break;
 	}
 	case ACTION_ROW_END:
 	{
-		int64_t new = (g_ctx.view_cursor / ROW_SIZE + 1) * ROW_SIZE - 1;
-		new = MAX (new, g_ctx.data_offset);
-		new = MIN (new, g_ctx.data_offset + g_ctx.data_len - 1);
+		int64_t new = (g.view_cursor / ROW_SIZE + 1) * ROW_SIZE - 1;
+		new = MAX (new, g.data_offset);
+		new = MIN (new, g.data_offset + g.data_len - 1);
 
-		g_ctx.view_cursor = new;
-		g_ctx.view_skip_nibble = false;
+		g.view_cursor = new;
+		g.view_skip_nibble = false;
 		xui_invalidate ();
 		break;
 	}
 
 	case ACTION_FIELD_PREVIOUS:
 	{
-		ssize_t i = app_find_marks (g_ctx.view_cursor);
-		if (i >= 0 && (size_t) i < g_ctx.marks_by_offset_len
-		 && g_ctx.marks_by_offset[i].offset == g_ctx.view_cursor)
+		ssize_t i = app_find_marks (g.view_cursor);
+		if (i >= 0 && (size_t) i < g.marks_by_offset_len
+		 && g.marks_by_offset[i].offset == g.view_cursor)
 			i--;
 		return app_jump_to_marks (i);
 	}
 	case ACTION_FIELD_NEXT:
-		return app_jump_to_marks (app_find_marks (g_ctx.view_cursor) + 1);
+		return app_jump_to_marks (app_find_marks (g.view_cursor) + 1);
 
 	case ACTION_QUIT:
 		app_quit ();
@@ -1472,7 +1472,7 @@ app_process_action (enum action action)
 		break;
 
 	case ACTION_TOGGLE_ENDIANITY:
-		g_ctx.endianity = (g_ctx.endianity == ENDIANITY_LE)
+		g.endianity = (g.endianity == ENDIANITY_LE)
 			? ENDIANITY_BE : ENDIANITY_LE;
 		xui_invalidate ();
 		break;
@@ -1491,23 +1491,23 @@ app_process_left_mouse_click (struct widget *w, int x, int y)
 		return app_process_action (ACTION_TOGGLE_ENDIANITY);
 
 	// XXX: This is really ugly.
-	x = x / g_ctx.digitw - 2;
+	x = x / g.digitw - 2;
 	y = w->userdata;
 	switch (w->id)
 	{
 	case WIDGET_HEX:
 		x -= x/5 + x/21;
-		g_ctx.view_skip_nibble = x % 2;
+		g.view_skip_nibble = x % 2;
 		x /= 2;
 		break;
 	case WIDGET_ASCII:
-		g_ctx.view_skip_nibble = false;
+		g.view_skip_nibble = false;
 		break;
 	default:
 		return true;
 	}
 
-	g_ctx.view_cursor = g_ctx.view_top + y * ROW_SIZE + x;
+	g.view_cursor = g.view_top + y * ROW_SIZE + x;
 	return app_move_cursor_by_rows (0);
 }
 
@@ -1729,19 +1729,19 @@ app_on_signal_pipe_readable (const struct pollfd *fd, void *user_data)
 static void
 app_show_message (char *message)
 {
-	cstr_set (&g_ctx.message, message);
-	poller_timer_set (&g_ctx.message_timer, 5000);
+	cstr_set (&g.message, message);
+	poller_timer_set (&g.message_timer, 5000);
 	xui_invalidate ();
 }
 
 static void
 app_hide_message (void)
 {
-	if (!g_ctx.message)
+	if (!g.message)
 		return;
 
-	cstr_set (&g_ctx.message, NULL);
-	poller_timer_reset (&g_ctx.message_timer);
+	cstr_set (&g.message, NULL);
+	poller_timer_reset (&g.message_timer);
 	xui_invalidate ();
 }
 
@@ -1791,12 +1791,12 @@ app_on_clipboard_copy (const char *text)
 static void
 app_init_poller_events (void)
 {
-	g_ctx.signal_event = poller_fd_make (&g_ctx.poller, g_signal_pipe[0]);
-	g_ctx.signal_event.dispatcher = app_on_signal_pipe_readable;
-	poller_fd_set (&g_ctx.signal_event, POLLIN);
+	g.signal_event = poller_fd_make (&g.poller, g_signal_pipe[0]);
+	g.signal_event.dispatcher = app_on_signal_pipe_readable;
+	poller_fd_set (&g.signal_event, POLLIN);
 
-	g_ctx.message_timer = poller_timer_make (&g_ctx.poller);
-	g_ctx.message_timer.dispatcher = app_on_message_timer;
+	g.message_timer = poller_timer_make (&g.poller);
+	g.message_timer.dispatcher = app_on_message_timer;
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1874,7 +1874,7 @@ main (int argc, char *argv[])
 		exit (EXIT_SUCCESS);
 
 	case 'o':
-		if (!decode_size (optarg, &g_ctx.data_offset))
+		if (!decode_size (optarg, &g.data_offset))
 			exit_fatal ("invalid offset specified");
 		break;
 	case 's':
@@ -1900,7 +1900,7 @@ main (int argc, char *argv[])
 
 	if (forced_type && !strcmp (forced_type, "list"))
 	{
-		struct str_map_iter iter = str_map_iter_make (&g_ctx.coders);
+		struct str_map_iter iter = str_map_iter_make (&g.coders);
 		while (str_map_iter_next (&iter))
 			puts (iter.link->key);
 		exit (EXIT_SUCCESS);
@@ -1919,7 +1919,7 @@ main (int argc, char *argv[])
 	}
 	else if (argc == 1)
 	{
-		g_ctx.filename = xstrdup (argv[0]);
+		g.filename = xstrdup (argv[0]);
 		if ((input_fd = open (argv[0], O_RDONLY)) < 0)
 			exit_fatal ("cannot open `%s': %s", argv[0], strerror (errno));
 	}
@@ -1932,8 +1932,8 @@ main (int argc, char *argv[])
 
 	// Seek in the file or pipe however we can
 	static char seek_buf[8192];
-	if (lseek (input_fd, g_ctx.data_offset, SEEK_SET) == (off_t) -1)
-		for (uint64_t remaining = g_ctx.data_offset; remaining; )
+	if (lseek (input_fd, g.data_offset, SEEK_SET) == (off_t) -1)
+		for (uint64_t remaining = g.data_offset; remaining; )
 		{
 			ssize_t n_read = read (input_fd,
 				seek_buf, MIN (remaining, sizeof seek_buf));
@@ -1956,11 +1956,11 @@ main (int argc, char *argv[])
 		buf.len += n_read;
 	}
 
-	g_ctx.data = (uint8_t *) buf.str;
-	g_ctx.data_len = buf.len;
+	g.data = (uint8_t *) buf.str;
+	g.data_len = buf.len;
 
-	g_ctx.view_top = g_ctx.data_offset / ROW_SIZE * ROW_SIZE;
-	g_ctx.view_cursor = g_ctx.data_offset;
+	g.view_top = g.data_offset / ROW_SIZE * ROW_SIZE;
+	g.view_cursor = g.data_offset;
 
 	// We only need to convert to and from the terminal encoding
 	if (!setlocale (LC_CTYPE, ""))
@@ -1971,21 +1971,21 @@ main (int argc, char *argv[])
 	// TODO: eventually we should do this in a separate thread after load
 	//   as it may take a long time (-> responsivity) and once we allow the user
 	//   to edit the file, each change will need a background rescan
-	lua_pushcfunction (g_ctx.L, app_lua_error_handler);
-	lua_pushcfunction (g_ctx.L, app_lua_chunk_decode);
+	lua_pushcfunction (g.L, app_lua_error_handler);
+	lua_pushcfunction (g.L, app_lua_chunk_decode);
 
-	struct app_lua_chunk *chunk = app_lua_chunk_new (g_ctx.L);
-	chunk->offset = g_ctx.data_offset;
-	chunk->len = g_ctx.data_len;
+	struct app_lua_chunk *chunk = app_lua_chunk_new (g.L);
+	chunk->offset = g.data_offset;
+	chunk->len = g.data_len;
 
 	if (forced_type)
-		lua_pushstring (g_ctx.L, forced_type);
+		lua_pushstring (g.L, forced_type);
 	else
-		lua_pushnil (g_ctx.L);
-	if (lua_pcall (g_ctx.L, 2, 0, -4))
-		exit_fatal ("Lua: decoding failed: %s", lua_tostring (g_ctx.L, -1));
+		lua_pushnil (g.L);
+	if (lua_pcall (g.L, 2, 0, -4))
+		exit_fatal ("Lua: decoding failed: %s", lua_tostring (g.L, -1));
 
-	lua_pop (g_ctx.L, 1);
+	lua_pop (g.L, 1);
 #endif // WITH_LUA
 	app_flatten_marks ();
 
@@ -1995,28 +1995,28 @@ main (int argc, char *argv[])
 
 	xui_preinit ();
 	app_init_bindings ();
-	xui_start (&g_ctx.poller,
-		requested_x11, g_ctx.attrs, N_ELEMENTS (g_ctx.attrs));
+	xui_start (&g.poller,
+		requested_x11, g.attrs, N_ELEMENTS (g.attrs));
 	xui_invalidate ();
 
 	struct widget *w = g_xui.ui->label (0, XUI_ATTR_MONOSPACE, "8");
-	g_ctx.digitw = w->width;
+	g.digitw = w->width;
 	widget_destroy (w);
 
 	// Redirect all messages from liberty so that they don't disrupt display
 	g_log_message_real = app_log_handler;
 
-	g_ctx.polling = true;
-	while (g_ctx.polling)
-		poller_run (&g_ctx.poller);
+	g.polling = true;
+	while (g.polling)
+		poller_run (&g.poller);
 
 	xui_stop ();
 	g_log_message_real = log_message_stdio;
 	app_free_context ();
 
 #ifdef WITH_LUA
-	str_map_free (&g_ctx.coders);
-	lua_close (g_ctx.L);
+	str_map_free (&g.coders);
+	lua_close (g.L);
 #endif // WITH_LUA
 
 	return 0;
