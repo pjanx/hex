@@ -42,7 +42,7 @@ endif ()
 set (project_libraries ${Unistring_LIBRARIES}
 	${Ncursesw_LIBRARIES} termo-static)
 
-pkg_search_module (lua lua53 lua5.3 lua-5.3 lua>=5.3)
+pkg_search_module (lua lua53 lua5.3 lua-5.3 lua54 lua5.4 lua-5.4 lua>=5.3)
 option (WITH_LUA "Enable support for Lua plugins" ${lua_FOUND})
 if (WITH_LUA)
 	if (NOT lua_FOUND)
@@ -97,6 +97,10 @@ add_threads (${PROJECT_NAME})
 include (GNUInstallDirs)
 install (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install (FILES LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
+if (WITH_LUA)
+	install (DIRECTORY plugins
+		DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
+endif ()
 if (WITH_X11)
 	install (FILES ${PROJECT_NAME}.desktop
 		DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
@@ -149,7 +153,7 @@ foreach (page ${project_MAN_PAGES})
 endforeach ()
 
 # CPack
-set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Hex viewer")
+set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Interpreting hex viewer")
 set (CPACK_PACKAGE_VENDOR "Premysl Eric Janouch")
 set (CPACK_PACKAGE_CONTACT "Přemysl Eric Janouch <p@janouch.name>")
 set (CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
