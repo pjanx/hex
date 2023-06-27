@@ -23,7 +23,7 @@ Building and Running
 --------------------
 Build dependencies: CMake, pkg-config, awk, liberty (included),
  termo (included), asciidoctor or asciidoc (recommended but optional) +
-Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting)
+Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting) +
 Optional runtime dependencies: x11, xft
 
  $ git clone --recursive https://git.janouch.name/p/hex.git
