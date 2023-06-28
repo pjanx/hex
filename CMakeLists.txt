@@ -79,6 +79,14 @@ include_directories (${Unistring_INCLUDE_DIRS}
 	${Ncursesw_INCLUDE_DIRS} ${Termo_INCLUDE_DIRS})
 
 # Configuration
+if ("${CMAKE_SYSTEM_NAME}" MATCHES "BSD")
+	# Need this for SIGWINCH in FreeBSD and OpenBSD respectively;
+	# our POSIX version macros make it undefined
+	add_definitions (-D__BSD_VISIBLE=1 -D_BSD_SOURCE=1)
+elseif (APPLE)
+	add_definitions (-D_DARWIN_C_SOURCE)
+endif ()
+
 include (CheckFunctionExists)
 set (CMAKE_REQUIRED_LIBRARIES ${Ncursesw_LIBRARIES})
 CHECK_FUNCTION_EXISTS ("resizeterm" HAVE_RESIZETERM)
