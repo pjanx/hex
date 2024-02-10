@@ -63,7 +63,7 @@ if (WITH_LUA)
 	endif ()
 endif ()
 
-pkg_check_modules (x11 x11 xrender xft fontconfig)
+pkg_check_modules (x11 x11 xrender xft fontconfig libpng)
 option (WITH_X11 "Build with X11 support" ${x11_FOUND})
 if (WITH_X11)
 	if (NOT x11_FOUND)
@@ -110,6 +110,22 @@ if (WITH_LUA)
 		DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
 endif ()
 if (WITH_X11)
+	include (IconUtils)
+
+	set (icon_base ${PROJECT_BINARY_DIR}/icons)
+	set (icon_png_list)
+	foreach (icon_size 16 32 48)
+		icon_to_png (${PROJECT_NAME} ${PROJECT_SOURCE_DIR}/${PROJECT_NAME}.svg
+			${icon_size} ${icon_base} icon_png)
+		list (APPEND icon_png_list ${icon_png})
+	endforeach ()
+
+	add_custom_target (icons ALL DEPENDS ${icon_png_list})
+
+	install (FILES ${PROJECT_NAME}.svg
+		DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+	install (DIRECTORY ${icon_base}
+		DESTINATION ${CMAKE_INSTALL_DATADIR})
 	install (FILES ${PROJECT_NAME}.desktop
 		DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 endif ()

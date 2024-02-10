@@ -23,10 +23,11 @@ The rest of this README will concern itself with externalities.
 
 Building and Running
 --------------------
-Build dependencies: CMake, pkg-config, awk, liberty (included),
- termo (included), asciidoctor or asciidoc (recommended but optional) +
+Build-only dependencies: CMake, pkg-config, awk, liberty (included),
+ termo (included), asciidoctor or asciidoc (recommended but optional),
+ rsvg-convert (X11) +
 Runtime dependencies: ncursesw, libunistring, Lua >= 5.3 (for highlighting) +
-Optional runtime dependencies: x11, xft
+Optional runtime dependencies: x11 + xft + libpng (X11)
 
  $ git clone --recursive https://git.janouch.name/p/hex.git
  $ mkdir hex/build
