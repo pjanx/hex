@@ -1,7 +1,7 @@
 /*
  * hex -- hex viewer
  *
- * Copyright (c) 2016 - 2023, Přemysl Eric Janouch <p@janouch.name>
+ * Copyright (c) 2016 - 2024, Přemysl Eric Janouch <p@janouch.name>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted.
@@ -1205,6 +1205,8 @@ app_lua_load_plugins (const char *plugin_dir)
 		return;
 	}
 
+	lua_pushcfunction (g.L, app_lua_error_handler);
+
 	struct dirent *iter;
 	while ((errno = 0, iter = readdir (dir)))
 	{
@@ -1213,16 +1215,19 @@ app_lua_load_plugins (const char *plugin_dir)
 			continue;
 
 		char *path = xstrdup_printf ("%s/%s", plugin_dir, iter->d_name);
-		lua_pushcfunction (g.L, app_lua_error_handler);
 		if (luaL_loadfile (g.L, path)
 		 || lua_pcall (g.L, 0, 0, -2))
-			exit_fatal ("Lua: %s", lua_tostring (g.L, -1));
-		lua_pop (g.L, 1);
+		{
+			print_error ("%s: %s", path, lua_tostring (g.L, -1));
+			lua_pop (g.L, 1);
+		}
 		free (path);
 	}
 	if (errno)
 		exit_fatal ("readdir: %s", strerror (errno));
 	closedir (dir);
+
+	lua_pop (g.L, 1);
 }
 
 static void
