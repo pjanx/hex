@@ -71,6 +71,12 @@ enum
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+
+// This test is too annoying to do in CMake due to CheckTypeSize() being unable
+// to take link_directories(), and the Lua constant is documented.
+#if LUA_MAXINTEGER < INT64_MAX
+#error Lua must have at least 64-bit integers
+#endif
 #endif // WITH_LUA
 
 #define APP_TITLE  PROGRAM_NAME         ///< Left top corner
