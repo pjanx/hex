@@ -40,7 +40,7 @@ else ()
 endif ()
 
 set (project_libraries ${Unistring_LIBRARIES}
-	${Ncursesw_LIBRARIES} termo-static)
+	${Ncursesw_LIBRARIES} ${Termo_LIBRARIES})
 
 pkg_search_module (lua lua53 lua5.3 lua-5.3 lua54 lua5.4 lua-5.4 lua>=5.3)
 option (WITH_LUA "Enable support for Lua plugins" ${lua_FOUND})
