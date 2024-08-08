@@ -170,7 +170,7 @@ g;
 
 // --- Configuration -----------------------------------------------------------
 
-static struct config_schema g_config_colors[] =
+static const struct config_schema g_config_colors[] =
 {
 #define XX(name_, config, fg_, bg_, attrs_) \
 	{ .name = config, .type = CONFIG_ITEM_STRING },
