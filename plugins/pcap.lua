@@ -16,11 +16,17 @@
 --
 
 local detect = function (c)
+	if #c < 4 then
+		return false
+	end
 	local magic = c:u32 ()
 	return magic == 0xa1b2c3d4 or magic == 0xd4c3b2a1
 end
 
 local detect_ng = function (c)
+	if #c < 8 then
+		return false
+	end
 	local magic = c (9):u32 ()
 	return c:u32 () == 0x0a0d0d0a
 		and (magic == 0x1a2b3c4d or magic == 0x4d3c2b1a)

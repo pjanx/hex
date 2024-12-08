@@ -16,7 +16,7 @@
 --
 
 local detect = function (c)
-	return c:read (4) == "Xcur"
+	return #c >= 4 and c:read (4) == "Xcur"
 end
 
 -- https://www.x.org/releases/current/doc/man/man3/Xcursor.3.xhtml

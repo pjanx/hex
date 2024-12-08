@@ -16,7 +16,7 @@
 --
 
 local detect = function (c)
-	return c:read (2) == "\x1f\x8b"
+	return #c >= 2 and c:read (2) == "\x1f\x8b"
 end
 
 local function latin1_to_utf8 (s)

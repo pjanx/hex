@@ -335,7 +335,7 @@ end
 -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 local detect = function (c)
-	return c:read (5) == "%PDF-"
+	return #c >= 5 and c:read (5) == "%PDF-"
 end
 
 local decode_xref_subsection = function (lex, start, count, result)

@@ -18,7 +18,7 @@
 -- See man 5 elf, /usr/include/elf.h and /usr/include/llvm/Support/ELF.h
 
 local detect = function (c)
-	return c:read (4) == "\x7FELF"
+	return #c >= 4 and c:read (4) == "\x7FELF"
 end
 
 local ph_type_table = {

@@ -16,6 +16,9 @@
 --
 
 local detect = function (c)
+	if #c < 68 then
+		return false
+	end
 	c.position = 65
 	return c:read (4) == "\x7F\x10\xDA\xBE"
 end
