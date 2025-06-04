@@ -89,7 +89,7 @@ include_directories (${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR})
 
 # Build the main executable and link it
 add_executable (${PROJECT_NAME} ${PROJECT_NAME}.c)
-target_link_libraries (${PROJECT_NAME} ${project_libraries})
+target_link_libraries (${PROJECT_NAME} PRIVATE ${project_libraries})
 add_threads (${PROJECT_NAME})
 
 # Installation

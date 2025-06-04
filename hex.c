@@ -554,9 +554,9 @@ app_layout_row (int64_t addr, int y, int attrs)
 	}
 
 	struct widget *w = NULL;
-	app_push (&l, (w = xui_hbox (hex.head)))->id = WIDGET_HEX;
+	app_push (&l, (w = xui_hbox (hex.head)))->widget_id = WIDGET_HEX;
 	w->userdata = y;
-	app_push (&l, (w = xui_hbox (ascii.head)))->id = WIDGET_ASCII;
+	app_push (&l, (w = xui_hbox (ascii.head)))->widget_id = WIDGET_ASCII;
 	w->userdata = y;
 	return xui_hbox (l.head);
 }
@@ -692,7 +692,8 @@ app_layout_footer (void)
 	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
 	app_push (&statusl, app_mono_label (APP_ATTR (BAR),
-		g.endianity == ENDIANITY_LE ? "LE" : "BE"))->id = WIDGET_ENDIANITY;
+		g.endianity == ENDIANITY_LE ? "LE" : "BE"))
+		->widget_id = WIDGET_ENDIANITY;
 	app_push (&statusl, g_xui.ui->padding (APP_ATTR (BAR), 1, 1));
 
 	int64_t top = g.view_top;
@@ -1503,13 +1504,13 @@ app_process_action (enum action action)
 static bool
 app_process_left_mouse_click (struct widget *w, int x, int y)
 {
-	if (w->id == WIDGET_ENDIANITY)
+	if (w->widget_id == WIDGET_ENDIANITY)
 		return app_process_action (ACTION_TOGGLE_ENDIANITY);
 
 	// XXX: This is really ugly.
 	x = x / g.digitw - 2;
 	y = w->userdata;
-	switch (w->id)
+	switch (w->widget_id)
 	{
 	case WIDGET_HEX:
 		x -= x/5 + x/21;
@@ -1541,7 +1542,7 @@ app_find_widget (struct widget *list, int x, int y)
 		struct widget *child = app_find_widget (w->children, x, y);
 		if (child)
 			target = child;
-		else if (w->id)
+		else if (w->widget_id)
 			target = w;
 	}
 	return target;
