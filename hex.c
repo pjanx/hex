@@ -1239,7 +1239,12 @@ app_lua_load_plugins (const char *plugin_dir)
 static void
 app_lua_init (void)
 {
-	if (!(g.L = lua_newstate (app_lua_alloc, NULL)))
+#if LUA_VERSION_NUM >= 505
+	g.L = lua_newstate (app_lua_alloc, NULL, 0);
+#else
+	g.L = lua_newstate (app_lua_alloc, NULL);
+#endif
+	if (!g.L)
 		exit_fatal ("Lua initialization failed");
 
 	g.coders = str_map_make (app_lua_coder_free);
